@@ -1,0 +1,189 @@
+---
+title: "Parse PSMs"
+author:
+  - name: "Tom Smith"
+    affiliation: "Cambridge Centre for Proteomics"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+abstract: | 
+  Here, we parse the PSM-level PD output and QC
+output:
+  pdf_document:
+  html_notebook: default
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+---
+
+Load libraries
+```{r setup, message=FALSE}
+
+#### Load packages ####
+library(camprotR)
+library(ggplot2)
+library(tidyverse)
+library(MSnbase)
+```
+
+Read in PSM data
+```{r}
+infiles <- Sys.glob('../raw/total*PSMs.txt.gz')
+names(infiles) <- c('AGC: 2E5',  'AGC: 5E4')
+psm <- infiles %>% lapply(read.delim)
+print(infiles)
+```
+
+Make the cRAP list for filtering
+```{r}
+get_fasta_ids <- function(fasta){
+  # Load the FASTA 
+  bs.fasta <- Biostrings::fasta.index(fasta, seqtype = "AA")
+  
+  # Extract the UniProt accessions 
+  accessions <- bs.fasta %>% 
+    pull(desc) %>% 
+    stringr::str_extract_all("(?<=\\|).*?(?=\\|)") %>% 
+    unlist()
+
+  accessions
+}
+
+crap.accessions <- get_fasta_ids('../shared_files/cRAP_FullIdentifiers.fasta')
+
+
+```
+
+Match species to uniprotID
+```{r}
+hs.accessions <- get_fasta_ids(
+  '../shared_files/CCP_SwissProt_homo_sapiens_proteome_without_isoforms_20180409.fasta')
+sc.accessions <- get_fasta_ids(
+  '../shared_files/swissprot_yeast_database_june2020.fasta')
+
+uniprot_2_species <- data.frame('id'=c(hs.accessions, sc.accessions),
+                                'species'=c(rep('H.sapiens', length(hs.accessions)),
+                                            rep('S.cerevisiae', length(sc.accessions))))
+head(uniprot_2_species)
+```
+
+Parse and filter PSMs to remove cRAP proteins
+```{r}
+psm_parsed <- psm %>% lapply(function(x){
+  parse_features(x, TMT=TRUE, level='PSM',
+                 crap_proteins=crap.accessions, unique_master=FALSE)
+})
+```
+Annotated the data with the species
+```{r}
+psm_parsed_annt <- psm_parsed %>% lapply(function(x){
+  
+ species_matches <- x %>% select(Protein.Accessions) %>%
+  mutate(Protein.Accessions_sep=Protein.Accessions) %>%
+  separate_rows(Protein.Accessions_sep) %>%
+  merge(uniprot_2_species, by.x='Protein.Accessions_sep', by.y='id', all.x=TRUE) %>%
+  group_by(Protein.Accessions) %>%
+  summarise(all_species=paste0(unique(species), collapse='; ')) %>%
+  mutate(species=ifelse(grepl(';', all_species), 'mixed', all_species))
+ 
+ x %>% merge(species_matches, by='Protein.Accessions')
+})
+```
+Checking the above hasn't altered `nrow`
+```{r}
+psm_parsed %>% lapply(nrow)
+psm_parsed_annt %>% lapply(nrow)
+```
+
+Summarise PSMs per species
+```{r}
+psm_parsed_annt %>% names() %>% lapply(function(x){
+  p1 <- psm_parsed_annt[[x]] %>%
+    group_by(species) %>%
+    tally() %>%
+    ggplot(aes(species, n)) +
+    geom_bar(stat='identity') +
+    theme_camprot() +
+    xlab('') +
+    ylab('PSMs') +
+    ggtitle(x)
+  
+  p2 <- psm_parsed_annt[[x]] %>%
+    select(Master.Protein.Accessions, species) %>%
+    unique() %>%
+    group_by(species) %>% tally() %>%
+    ggplot(aes(species, n)) +
+    geom_bar(stat='identity') +
+    theme_camprot() +
+    xlab('') +
+    ylab('Proteins') +
+    ggtitle(x)
+  
+  print(p1)
+  print(p2)
+  
+  return(NULL)
+})
+```
+Checking the number of proteins in each, and the intersection
+```{r}
+length(unique(psm_parsed_annt$`AGC: 2E5`$Master.Protein.Accessions))
+length(unique(psm_parsed_annt$`AGC: 5E4`$Master.Protein.Accessions))
+length(intersect(unique(psm_parsed_annt$`AGC: 2E5`$Master.Protein.Accessions),
+                 unique(psm_parsed_annt$`AGC: 5E4`$Master.Protein.Accessions)))
+```
+
+
+Make MSnSets
+```{r}
+
+sample_info <- read.delim('../raw/sample_info.tsv') %>% tibble::column_to_rownames('tag')
+
+psm_res <- psm_parsed_annt %>% lapply(function(x){
+  # Abundance columns for TMT PD-output start with Abundance 
+  abundance_cols <- colnames(x)[grepl('Abundance.', colnames(x))]
+  
+  .e <- as.matrix(x[,abundance_cols])
+  .f <- x[,setdiff(colnames(x), abundance_cols)]
+  
+  # update the column names to remove the 'Abundance.` prefix
+  colnames(.e) <- gsub('Abundance.', '', colnames(.e))
+  
+  res <- MSnbase::MSnSet(exprs=.e, fData=.f, pData=sample_info)
+  
+  res
+})
+```
+
+Plotting the distribution of tag intensities in each full dataset and the single species subsets. Note that the tag intensities for yeast fall into the 3 groups we expect given the experimental design.
+```{r}
+
+psm_res %>% names() %>% lapply(function(x){
+  
+  all <- psm_res[[x]]
+  hs <- all[fData(all)$species=='H.sapiens']
+  sc <- all[fData(all)$species=='S.cerevisiae']
+  
+  slices <- list('All'=all, 'H.sapiens'=hs, 'S.cerevisiae'=sc)
+  for(slice in names(slices)){
+    p <- slices[[slice]] %>% log(base=2) %>% plot_quant() +
+      ggtitle(sprintf('%s - %s', x, slice)) +
+      ylab('PSM intensity (log2)')
+    print(p)
+    
+    p <- slices[[slice]] %>% log(base=2) %>% plot_quant(method='density') +
+      xlab('PSM intensity (log2)') +
+      ggtitle(sprintf('%s - %s', x, slice))
+    print(p)
+  }
+  return(NULL)
+})
+
+```
+
+
+
+
+Save for downstream notebooks
+```{r}
+saveRDS(psm_res, '../results/psm_res.rds')
+```
+

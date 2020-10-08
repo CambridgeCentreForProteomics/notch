@@ -1,0 +1,39 @@
+---
+title: 'Aggregate to protein-level abundances'
+author:
+  - name: "Tom Smith"
+    affiliation: "Cambridge Centre for Proteomics"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+abstract: | 
+  Here, we aggregate the PSM-level intensities into protein-level intensities
+output:
+  pdf_document:
+  html_notebook: default
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+---
+
+```{r}
+library(limma)
+library(DEqMS)
+```
+
+Save protein objects for downstream notebooks
+```{r}
+protein_robust_flt_sn <- readRDS('../results/protein_sum_flt_sn.rds')
+```
+
+
+```{r}
+dat <- exprs(protein_robust_flt_sn$`AGC: 2E5`)[,c(1:4, 8:10)] %>% log(base=2)
+
+spike <- factor(rep(c(1, 6), c(4,3)))
+study.design <- model.matrix(~ spike)
+
+fit <- lmFit(dat, study.design)
+fit <- eBayes(fit)
+plotSA(fit)
+
+```
+
