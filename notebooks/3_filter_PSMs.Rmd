@@ -84,13 +84,12 @@ psm_res %>% names() %>% lapply(function(x){
 ```
 OK, so essentially all the missing values are restricted to PSMs with low (<20) Signal:Noise ratios.
 
-
 ```{r}
 
 source('./R/get_quant_vs_mean.R')
 
 
-quant_vs_mean <- psm_res %>% lapply(get_quant_vs_mean) 
+quant_vs_mean <- psm_res %>% lapply(get_quant_vs_mean)
 
 quant_vs_mean <- quant_vs_mean %>% lapply(function(x){
   x %>%
@@ -347,8 +346,8 @@ quant_vs_mean %>% names() %>% lapply(function(x){
     
     p <- tmp_data %>%
       ggplot(aes(log2(intensity), diff)) +
-      geom_point(size=0.1, alpha=0.05, colour='grey10') +
-      geom_density_2d(size=0.25, colour=get_cat_palette(1)) +
+      geom_point(size=0.05, alpha=0.05, colour='grey10') +
+      geom_density2d(size=0.3, colour=get_cat_palette(2)[2]) +
       theme_camprot(base_size=12) +
       facet_grid(species~comparison, scales='free_y') +
       geom_hline(aes(yintercept=log2(expected)),
