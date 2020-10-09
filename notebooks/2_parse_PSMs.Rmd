@@ -187,3 +187,20 @@ Save for downstream notebooks
 saveRDS(psm_res, '../results/psm_res.rds')
 ```
 
+```{r}
+phospho_psm <- parse_features(read.delim('../raw/phospho_proteome_PSMs.txt.gz'), crap_proteins=crap.accessions)
+
+phospho_abundance_cols <- colnames(phospho_psm)[grepl('Abundance.', colnames(phospho_psm))]
+
+phospho_e <- as.matrix(phospho_psm[,phospho_abundance_cols])
+phospho_f <- phospho_psm[,setdiff(colnames(phospho_psm), phospho_abundance_cols)]
+
+# update the column names to remove the 'Abundance.` prefix
+colnames(phospho_e) <- gsub('Abundance.', '', colnames(phospho_e))
+
+phospho_res <- MSnbase::MSnSet(exprs=phospho_e, fData=phospho_f, pData=sample_info)
+phospho_res_flt <- phospho_res %>% filter_TMT_PSMs(inter_thresh=20, sn_thresh=10)
+plot_TMT_notch(phospho_res, facet_by_sample=TRUE)
+plot_TMT_notch(phospho_res_flt, facet_by_sample=TRUE)
+```
+

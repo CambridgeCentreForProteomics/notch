@@ -38,6 +38,7 @@ Create a list of PSM datasets
 psm_datasets <- list('unfiltered'=psm_res, 'filtered'=psm_res_flt, 'filtered, inc S/N'=psm_res_flt_sn)
 ```
 
+
 Function to aggregate from PSM to protein by 'sum' or 'robust'
 ```{r}
 aggregate_to_protein <- function(psm, method='robust'){
@@ -73,7 +74,9 @@ aggregate_to_protein <- function(psm, method='robust'){
     Biobase::exprs(protein) <- 2^Biobase::exprs(protein)
   }
   
-  protein
+  feature_counts <- count_features_per_protein(psm_filt)
+  
+  return(list('protein'=protein, 'feature_counts'=feature_counts))
 }
 ```
 
@@ -86,11 +89,14 @@ prot_sum <- psm_datasets %>% lapply(function(psm_dataset){
     aggregate_to_protein(x,  method='sum')
   })
 })
+
 ```
+
 How many proteins per PSM filtering and AGC target when using sum summarisation
 ```{r}
-prot_sum %>% lapply(function(x) lapply(x, dim))
+prot_sum %>% lapply(function(x) lapply(x, function(y) dim(y$protein)))
 ```
+
 Aggregate using robust
 ```{r}
 prot_robust <- psm_datasets %>% lapply(function(psm_dataset){
@@ -104,7 +110,7 @@ prot_robust <- psm_datasets %>% lapply(function(psm_dataset){
 
 How many proteins per PSM filtering and AGC target when using sum summarisation
 ```{r}
-prot_robust %>% lapply(function(x) lapply(x, dim))
+prot_robust %>% lapply(function(x) lapply(x, function(y) dim(y$protein)))
 ```
 
 Get fold changes for sum and robust-summarised protein abundances.
@@ -112,51 +118,20 @@ Get fold changes for sum and robust-summarised protein abundances.
 source('./R/get_quant_vs_mean.R')
 
 quant_vs_mean_prot_sum <- prot_sum %>% lapply(function(x){
-  lapply(x, get_quant_vs_mean)
+  lapply(x, function(y) get_quant_vs_mean(y$protein))
 }) 
 
 
 quant_vs_mean_prot_robust <- prot_robust %>% lapply(function(x){
-  lapply(x, get_quant_vs_mean)
+  lapply(x, function(y) get_quant_vs_mean(y$protein))
 }) 
 ```
-
 
 ```{r}
 notch_per_protein <- psm_datasets %>% lapply(function(psm_dataset){
   psm_dataset %>% lapply(get_notch_per_protein)
   })
 ```     
-
-
-Testing out function to plot protein intensity vs fold change
-```{r}
-x <- quant_vs_mean_prot_sum$`filtered, inc S/N`$`AGC: 2E5`
-y <- notch_per_protein$`filtered, inc S/N`$`AGC: 2E5` %>% mutate(sample=remove_x(sample))
-
-to_plot <- merge(x, y, by.x=c('id', 'tag'), by.y=c('Master.Protein.Accessions', 'sample')) %>%
-  filter(species!='mixed') 
-p <- to_plot  %>%
-  ggplot(aes(log2(intensity), diff)) +
-    theme_camprot(base_size=12) +
-    facet_grid(species~comparison, scales='free_y') +
-    geom_hline(aes(yintercept=log2(expected)),
-               data=expected,
-               colour='black', linetype=2) +
-    xlab('Tag intensity (log2)') +
-    ylab('Difference in intensity (log2)')
-
-print(p + geom_point(size=0.2, alpha=0.1, colour='grey30'))
-```
-
-```{r}
-suppressWarnings(print(p %+% to_plot[to_plot$fraction_below>0,] + aes(fraction_below) + geom_point(size=0.5, alpha=0.5) +
-        geom_smooth()))
-```
-
-```{r}
-
-```
 
 ```{r}
 summarisations <- list('sum'=quant_vs_mean_prot_sum, 'robust'=quant_vs_mean_prot_robust)
@@ -210,7 +185,8 @@ summarisations %>% names() %>% lapply(function(method){
 
 
 ```{r}
-saveRDS(quant_vs_mean_prot_sum, '../results/quant_vs_mean_prot_sum.rds')
-saveRDS(quant_vs_mean_prot_robust, '../results/quant_vs_mean_prot_robust.rds')
+saveRDS(prot_sum, '../results/prot_sum.rds')
+saveRDS(prot_robust, '../results/prot_robust.rds')
+saveRDS(notch_per_protein, '../results/notch_per_protein.rds')
 ```
 

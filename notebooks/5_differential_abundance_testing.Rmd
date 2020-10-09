@@ -15,25 +15,337 @@ fontsize: 11pt
 ---
 
 ```{r}
+library(camprotR)
+library(tidyverse)
 library(limma)
 library(DEqMS)
 ```
 
-Save protein objects for downstream notebooks
+
 ```{r}
-protein_robust_flt_sn <- readRDS('../results/protein_sum_flt_sn.rds')
+prot_sum <- readRDS('../results/prot_sum.rds')
+prot_robust <- readRDS('../results/prot_robust.rds')
+notch_per_protein <- readRDS('../results/notch_per_protein.rds')
 ```
 
 
 ```{r}
-dat <- exprs(protein_robust_flt_sn$`AGC: 2E5`)[,c(1:4, 8:10)] %>% log(base=2)
+run_limma <- function(obj, notch_count, name, mock=FALSE){
+  if(mock){
+    # Treat the first 4 tags as duplicates for two conditions
+    extract_cols <- 1:4
+    spike <- factor(rep(c('a','b'), c(2,2)))
+    contrasts <- 'spikeb'
+  } else {
+    extract_cols <- 1:10
+    spike <- factor(rep(c(1,2,6), c(4,3,3)))
+    contrasts <- c('spike2', 'spike6')
+  }
+  
+  contrasts2desc <- c('Mock', '2x vs 1x', '6x vs 1x')
+  names(contrasts2desc) <- c('spikeb', 'spike2', 'spike6')
+  
+  results <- vector('list', length(contrasts))
+  names(results) <- unname(contrasts2desc[contrasts])
+  
+  study.design <- model.matrix(~ spike)
+  
+  dat <- exprs(obj)[,extract_cols] %>% log(base=2)
+  
+  fit <- lmFit(dat, study.design)
+  fit <- eBayes(fit, trend=TRUE)
+  plotSA(fit)
+  
+  for(contrast in contrasts){
 
-spike <- factor(rep(c(1, 6), c(4,3)))
-study.design <- model.matrix(~ spike)
+    limma.results <- topTable(fit, coef = contrast, n = Inf)
+  
+    limma.results <- notch_count %>%
+      mutate(sample=remove_x(sample)) %>%
+      filter(sample %in% colnames(dat)[extract_cols]) %>%
+      group_by(Master.Protein.Accessions) %>%
+      summarise(mean_fraction_below=mean(fraction_below)) %>%
+      merge(limma.results, by.x='Master.Protein.Accessions', by.y='row.names') %>%
+      merge(fData(obj)[,'species',drop=FALSE], by.x='Master.Protein.Accessions', by.y='row.names') %>%
+      filter(species!='mixed') %>%
+      mutate(contains_notch=mean_fraction_below>0,
+             binned_ave_expr=Hmisc::cut2(AveExpr, g=8),
+             name=name,
+             comparison=contrasts2desc[[contrast]])
+    
+    results[[contrasts2desc[[contrast]]]] <- limma.results
+    
+    plot_title <- sprintf('%s - %s', name, contrasts2desc[[contrast]]) 
+    p <- ggplot(limma.results) +
+      ggtitle(plot_title)
+    
+    p1 <- p + aes(x = P.Value) + 
+      geom_histogram(bins = 50, boundary = 0) + 
+      theme_camprot() +
+      facet_wrap(~species, scales='free')
+    
+    print(p1)
+    print(p1 + aes(logFC))
+    
+    p2 <- p +
+      aes(log10(P.Value), colour=contains_notch) +
+      geom_density() +
+      theme_camprot() +
+      facet_wrap(~species)
+    
+    print(p2)
+    
+    p3 <- p +
+      aes(mean_fraction_below, logFC) +
+      geom_point() +
+      theme_camprot() +
+      facet_wrap(~species)
+    
+    print(p3)
+  
+    p4 <- p + aes(logFC, colour=contains_notch) +
+      geom_density() +
+      facet_wrap(~species, scales='free') +
+      theme_camprot() +
+       xlab('Fold change (Log2)')
+  
+    if(!mock){
+     p4 <- p4 + geom_vline(data=expected[expected$comparison=='2 vs 1',],
+                           aes(xintercept=log2(expected)), linetype=2)
+   } else{
+     p4 <- p4 + geom_vline(xintercept=0 ,linetype=2)
+   }
+    
+    print(p4)
+    
+    p5 <- limma.results %>%
+      group_by(species, contains_notch, binned_ave_expr) %>%
+      summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01))) %>%
+      ggplot(aes(binned_ave_expr, proportion_sig, colour=contains_notch, group=contains_notch)) +
+      geom_line() +
+      theme_camprot(base_size=12) +
+      facet_wrap(~species) +
+      theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+      xlab('Average protein abundance') +
+      ylab('Propotion significant (1% FDR)') +
+      ggtitle(plot_title)
 
-fit <- lmFit(dat, study.design)
-fit <- eBayes(fit)
-plotSA(fit)
+   print(p5)
+  }
+  
+  results <- results %>% do.call(what='rbind')
+
+  results
+}
 
 ```
 
+
+```{r}
+summarisations <- list('sum'=prot_sum, 'robust'=prot_robust)
+
+all_mock_limma_results <- summarisations %>% names() %>% lapply(function(method){
+    
+  summarisations[[method]] %>% names() %>% lapply(function(flt){
+    
+    summarisations[[method]][[flt]] %>% names() %>% lapply(function(agc){
+      obj <- summarisations[[method]][[flt]][[agc]]$protein
+      notch_count <- notch_per_protein[[flt]][[agc]]
+      
+      results <- run_limma(obj, notch_count, mock=TRUE,
+                           name=sprintf('%s - %s - %s', agc, flt, method))
+      
+      results
+    }) %>% do.call(what='rbind')
+  }) %>% do.call(what='rbind')
+}) %>% do.call(what='rbind') %>% separate(name, into=c('agc', 'filtering', 'summarisation'), sep=' - ')
+```
+
+```{r}
+
+
+all_limma_results <- summarisations %>% names() %>% lapply(function(method){
+    
+  summarisations[[method]] %>% names() %>% lapply(function(flt){
+    
+    summarisations[[method]][[flt]] %>% names() %>% lapply(function(agc){
+      obj <- summarisations[[method]][[flt]][[agc]]$protein
+      notch_count <- notch_per_protein[[flt]][[agc]]
+      
+      results <- run_limma(obj, notch_count,
+                           name=sprintf('%s - %s - %s', agc, flt, method))
+      results
+    }) %>% do.call(what='rbind')
+  }) %>% do.call(what='rbind')
+}) %>% do.call(what='rbind') %>% %>% separate(name, into=c('agc', 'filtering', 'summarisation'), sep=' - ')
+      
+
+```
+```{r}
+
+for(filt in unique(all_limma_results$filtering)){
+  for(method in unique(all_limma_results$summarisation)){  
+    p <- all_limma_results %>%
+      filter(filtering==filt, summarisation==method) %>%
+      group_by(species, contains_notch, agc, comparison) %>%
+      summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01))) %>%
+      ggplot(aes(contains_notch, proportion_sig,
+                 colour=agc,
+                 group=interaction(contains_notch, comparison, agc))) +
+      geom_point() +
+      theme_camprot(base_size=12) +
+      theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+      xlab('Average protein abundance') +
+      ylab('Propotion significant (1% FDR)') +
+      facet_grid(comparison~species) +
+      ggtitle(sprintf('%s - %s', method, filt)) +
+      scale_colour_manual(values=get_cat_palette(2), name='') +
+      scale_x_discrete(labels=c('0', '>0'), name='PSMs at/below notch') +
+      ylim(0,1)
+    
+    print(p)
+
+    p <- all_limma_results %>%
+      filter(filtering==filt, summarisation==method) %>%
+      mutate(binned_ave_expr=as.numeric(Hmisc::cut2(AveExpr, g=4))) %>%
+      group_by(species, binned_ave_expr, agc, comparison) %>%
+      summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01), na.rm=TRUE)) %>%
+      ggplot(aes(binned_ave_expr, proportion_sig, linetype=agc,
+                 group=interaction(comparison, agc))) +
+      geom_line() +
+      theme_camprot(base_size=12) +
+      theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+      xlab('Average protein abundance') +
+      ylab('Propotion significant (1% FDR)') +
+      facet_grid(comparison~species) +
+      ggtitle(sprintf('%s - %s', method, filt)) +
+      scale_linetype_discrete(name='') +
+      scale_x_continuous(breaks=1:5, name='Abundance quartile')
+    
+    print(p)
+    
+    p <- all_limma_results %>%
+      filter(filtering==filt, summarisation==method) %>%
+      mutate(binned_ave_expr=as.numeric(Hmisc::cut2(AveExpr, g=4))) %>%
+      group_by(species, contains_notch, binned_ave_expr, agc, comparison) %>%
+      summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01), na.rm=TRUE)) %>%
+      ggplot(aes(binned_ave_expr, proportion_sig,
+                 colour=contains_notch, linetype=agc,
+                 group=interaction(contains_notch, comparison, agc))) +
+      geom_line() +
+      theme_camprot(base_size=12) +
+      theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+      xlab('Average protein abundance') +
+      ylab('Propotion significant (1% FDR)') +
+      facet_grid(comparison~species) +
+      ggtitle(sprintf('%s - %s', method, filt)) +
+      scale_colour_manual(values=get_cat_palette(2),
+                          name='PSMs at/below notch', labels=c('0', '>0')) +
+      scale_linetype_discrete(name='') +
+      scale_x_continuous(breaks=1:5, name='Abundance quartile')
+    
+    print(p)
+  }
+}
+```
+```{r}
+print(expected)
+
+for(sp in unique(all_limma_results$species)){
+  for(cmp in unique(all_limma_results$comparison)){
+    p <- all_limma_results %>%
+      filter(species==sp, comparison==cmp) %>%
+      group_by(summarisation, contains_notch, agc, filtering) %>%
+      summarise(median_fc=median(2^logFC)) %>%
+      mutate(filtering=factor(filtering, levels=c('unfiltered', 'filtered', 'filtered, inc S/N'))) %>%
+      ggplot(aes(contains_notch, median_fc, colour=summarisation, group=summarisation)) +
+      geom_line() +
+      theme_camprot(base_size=15) +
+      facet_grid(filtering~agc) +
+      ggtitle(sprintf('%s - %s', sp, cmp))
+    
+    print(p)
+  }
+}
+
+all_limma_results %>%
+  filter(summarisation=='sum', filtering=='filtered, inc S/N') %>%
+  group_by(contains_notch, agc, filtering, species, comparison) %>%
+  summarise(median_fc=median(2^logFC)) %>%
+  mutate(comparison=gsub('x', '', comparison)) %>%
+  ggplot(aes(contains_notch, median_fc,
+             colour=interaction(agc, comparison, sep=':  '),
+             group=interaction(agc, comparison, sep=':  '))) +
+  geom_line() +
+  theme_camprot(base_size=15) +
+  facet_wrap(~species) +
+  geom_hline(data=expected[expected$comparison %in% c('6 vs 1', '2 vs 1'),],
+             aes(yintercept=expected), linetype=2)
+```
+
+```{r}
+for(sp in unique(all_limma_results$species)){
+  p <- all_limma_results %>%
+    filter(summarisation=='sum', filtering=='filtered, inc S/N', species==sp) %>%
+    mutate(comparison=gsub('x', '', comparison)) %>%
+    ggplot(aes(logFC,
+               linetype=contains_notch,
+               colour=comparison)) +
+    geom_line(stat='density') +
+    theme_camprot(base_size=15) +
+    facet_wrap(~agc, scales='free') +
+    geom_vline(data=(expected %>% filter(comparison %in% c('6 vs 1', '2 vs 1'), species==sp)),
+               aes(xintercept=log2(expected), colour=comparison), linetype=2)
+  
+  if(sp=='H.sapiens'){
+    p <- p + coord_cartesian(xlim=c(-.8,.3))
+  }
+  print(p)
+}
+
+```
+
+
+```{r}
+all_mock_limma_results %>%
+  group_by(species, filtering, summarisation, contains_notch, agc, comparison) %>%
+  summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01), na.rm=TRUE)) %>%
+  arrange(desc(proportion_sig))
+
+
+all_mock_limma_results %>%
+  group_by(species, filtering, summarisation, contains_notch, agc, comparison) %>%
+  summarise(median_fc=median(2^logFC)) %>%
+  arrange(desc(abs(median_fc))) %>% head()
+
+
+
+```
+
+
+
+code for DEqMS if required...
+```{r}
+feature_count <- prot_robust$`filtered, inc S/N`$`AGC: 5E4`$feature_counts %>%
+  filter(sample %in% colnames(dat))
+
+# Get the minimum peptide count per protein
+min.pep.count <- feature_count %>% 
+  group_by(Master.Protein.Accessions) %>% 
+  summarise(Min.pep.count = min(n)) %>% 
+  tibble::column_to_rownames("Master.Protein.Accessions")
+  
+# Add the min peptide count
+fit$count = min.pep.count[rownames(fit$coefficients), "Min.pep.count"]
+
+# Run DEqMS
+fit.deqms = spectraCounteBayes(fit)
+
+# Run the DEqMS giagnostic plots
+VarianceBoxplot(fit.deqms, n = 30, xlab = "PSM count")
+VarianceScatterplot(fit.deqms)
+
+# Extract the DEqMS results
+DEqMS.results <- outputResult(fit.deqms, coef_col = 2)
+
+```
