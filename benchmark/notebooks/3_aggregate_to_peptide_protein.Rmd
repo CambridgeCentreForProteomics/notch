@@ -105,22 +105,26 @@ pep_res <- psm_res_flt %>% lapply(function(agc_target){
 How many proteins per AGC target and threshold parameters are retained.
 ```{r}
 
-  
 plot_n_features <- function(obj, feature_name='Proteins'){
   p <- obj %>%
     lapply(function(x) lapply(x, function(y) nrow(y$agg))) %>% unlist() %>%
     data.frame() %>% setNames('n_proteins') %>%
     tibble::rownames_to_column('threshold') %>%
-    separate(threshold, into=c('agc', 'interference', 'mean_sn', 'notch'), sep='\\.|, ') %>%
+    separate(threshold, into=c('agc', NA), sep='\\.', remove=FALSE) %>%
+    mutate(threshold=gsub('AGC: .E..', '', threshold)) %>%
+    separate(threshold,
+             into=c('delta', 'interference', 'mean_sn', 'notch'), sep=', ', remove=FALSE) %>%
     mutate(notch=recode(notch, '1'='With notch filt', '0'='Without notch filt.')) %>%
-    ggplot(aes(interference, mean_sn, fill=n_proteins, label=n_proteins)) +
+    ggplot(aes(y=interaction(interference, delta, sep=', '),
+               x=mean_sn,
+               fill=n_proteins, label=n_proteins)) +
     geom_tile() +
     theme_camprot(base_size=15) +
     facet_grid(notch~agc) +
-    geom_text() +
+    geom_text(size=3) +
     scale_fill_gradient(low='grey90', high=get_cat_palette(1), name=feature_name) +
-    xlab('Maximum inteference (%)') +
-    ylab('Minimum mean signal/noise')
+    ylab('Maximum inteference (%),\nMinimum Delta score') +
+    xlab('Minimum mean signal/noise')
   
   print(p)
 }
@@ -151,7 +155,7 @@ summarisations <- list('protein'=prot_res, 'peptide'=pep_res)
 
 ```{r}
 # define thresholds to plot fold changes. Each set of threshold will be plotted at peptide and protein level, with both AGC settings
-datasets <- c('100, 0, 0') 
+datasets <- c('0, 100, 0, 0') 
 ```
 
 
