@@ -1,0 +1,491 @@
+---
+title: 'Filter PSMs'
+author:
+  - name: "Tom Smith"
+    affiliation: "Cambridge Centre for Proteomics"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+abstract: | 
+  Here, we filter the PSM-level PD output, with thresholds informed by missing values,
+  notch prominence and observed fold changes vs ground truths.
+output:
+  pdf_document:
+  html_notebook: default
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+---
+
+Load libraries
+```{r setup, message=FALSE}
+
+#### Load packages ####
+library(camprotR)
+library(ggplot2)
+library(tidyverse)
+library(MSnbase)
+library(biobroom)
+```
+
+Read in the PSM data
+```{r}
+psm_res <- readRDS('../results/psm_res.rds')
+```
+
+
+Plotting the proportion of missing values 
+```{r}
+
+psm_res %>% names() %>% lapply(function(x){
+  
+  all <- psm_res[[x]]
+  hs <- all[fData(all)$species=='H.sapiens']
+  sc <- all[fData(all)$species=='S.cerevisiae']
+  
+  slices <- list('All'=all, 'H.sapiens'=hs, 'S.cerevisiae'=sc)
+  for(slice in names(slices)){
+    p <- slices[[slice]] %>% plot_missing_SN() +
+      ggtitle(sprintf('%s - %s', x, slice))
+    print(p)
+  
+    p <- slices[[slice]] %>% plot_missing_SN_per_sample() +
+      ggtitle(sprintf('%s - %s', x, slice))
+    print(p)
+  }
+  return(NULL)
+})
+```
+OK, so essentially all the missing values are restricted to PSMs with low (<20) Signal:Noise ratios.
+
+
+```{r}
+
+source('../R/get_quant_vs_mean.R')
+
+
+quant_vs_mean <- psm_res %>% lapply(get_quant_vs_mean)
+
+quant_vs_mean <- quant_vs_mean %>% lapply(function(x){
+  x %>%
+    mutate(binned_interference=Hmisc::cut2(
+      Isolation.Interference.in.Percent, cuts=c(0,1,5,10,seq(20,100,20))),
+      binned_average_sn=Hmisc::cut2(Average.Reporter.SN, cuts=c(0,10,20,30,40,60,100)),
+      binned_intensity=Hmisc::cut2(intensity, cuts=c(0,10,20,30,40,60,100)),
+      binned_delta=Hmisc::cut2(Delta.Score, cuts=c(seq(0,.6,.1), 1)))
+})
+
+quant_vs_mean %>% lapply(dim)
+```
+```{r}
+plot(density(quant_vs_mean$`AGC: 5E4`$Delta.Score))
+```
+
+```{r}
+
+quant_vs_mean %>% names() %>% lapply(function(x){
+  p <- quant_vs_mean[[x]] %>%
+    select(id, species, binned_average_sn, binned_interference, binned_delta) %>%
+    unique() %>%
+    group_by(species, binned_average_sn, binned_interference, binned_delta) %>%
+    tally() %>%
+    ggplot(aes(binned_interference, n)) +
+    geom_bar(stat='identity') +
+    facet_wrap(~species, scales='free') +
+    theme_camprot(base_size=15) +
+    theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+    ggtitle(x)
+  
+  print(p)
+  
+  print(p + aes(binned_average_sn) +
+          xlab('Signal/Noise'))
+  
+  print(p + aes(binned_delta) +
+          xlab('Delta score'))
+  
+  return(NULL)
+})
+```
+
+Define the expected ratios from the experimental design
+```{r}
+exp_design <- pData(psm_res$`AGC: 2E5`) %>%
+  select(condition, S.cerevisiae=yeast, H.sapiens=human) %>%
+  unique()
+  
+sc_spikes <- exp_design$S.cerevisiae
+hs_spikes <- exp_design$H.sapiens
+
+get_ground_truth <- function(sc_spikes, hs_spikes, ix_1, ix_2){
+  comparison <- sprintf('%s vs %s', sc_spikes[ix_2], sc_spikes[ix_1])
+  hs_ground_truth <- hs_spikes[ix_2]/hs_spikes[ix_1]
+  sc_ground_truth <- sc_spikes[ix_2]/sc_spikes[ix_1]
+  return(c(comparison, hs_ground_truth, sc_ground_truth))
+}
+library(gtools)
+
+expected <- apply(permutations(n=3,r=2), 1, function(x){
+  get_ground_truth(sc_spikes, hs_spikes, x[1], x[2])
+}) %>% t() %>% data.frame() %>%
+  setNames(c('comparison', 'H.sapiens', 'S.cerevisiae')) %>%
+  mutate_at(vars(S.cerevisiae, 
+                 H.sapiens), 
+            funs(as.numeric)) %>%
+  pivot_longer(-comparison, names_to='species', values_to='expected')
+
+print(expected)
+
+positive_comparisons <- expected %>% filter(species=='S.cerevisiae', expected>1) %>%
+  pull(comparison)
+```
+
+
+
+Visualising how interference and tag intensity affect observed fold changes
+```{r, fig.height=8, fig.width=8, warning=FALSE}
+quant_vs_mean %>% names() %>% lapply(function(x){
+  p <- quant_vs_mean[[x]] %>%
+    filter(Isolation.Interference.in.Percent<=50, # no need to consider interference>=50%
+           comparison %in% positive_comparisons) %>% 
+    filter(species=='S.cerevisiae', !below_notch) %>%
+    ggplot(aes(diff, colour=binned_intensity)) +
+    geom_density() +
+    theme_camprot(base_size=15) +
+    theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+    facet_grid(binned_interference~comparison, scales='free') +
+    geom_vline(aes(xintercept=log2(expected)),
+               data=expected[(expected$species=='S.cerevisiae' &
+                                expected$comparison %in% positive_comparisons),],
+               colour=get_cat_palette(1), linetype=2) +
+    ylab('Density') +
+    xlab('Difference in intensity') +
+    xlim(-6,3) +
+    ggtitle(x) +
+    scale_colour_discrete(name='Intensity')
+  
+  print(p)
+  print(p + aes(colour=binned_interference) + facet_grid(binned_average_sn~comparison) +
+    scale_colour_discrete(name='Interference (%)'))
+  
+  print(p + aes(colour=binned_interference) + facet_grid(binned_delta~comparison) +
+    scale_colour_discrete(name='Interference (%)'))
+  
+  
+  print(p + aes(colour=binned_delta) + facet_wrap(~comparison) +
+          coord_cartesian(xlim=c(-2, 3)) +
+    scale_colour_manual(name='Delta score', values=get_cat_palette(7)))
+
+  return(NULL)
+})
+```
+
+```{r}
+quant_vs_mean$`AGC: 5E4` %>%
+    filter(Isolation.Interference.in.Percent<=50, # no need to consider interference>=50%
+           comparison %in% positive_comparisons) %>% 
+    filter(species=='S.cerevisiae', !below_notch) %>%
+    ggplot(aes(Delta.Score, diff)) +
+    geom_point(size=0.1, alpha=0.1) +
+    geom_smooth() +
+    theme_camprot(base_size=15) +
+    theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+    facet_grid(~comparison, scales='free') +
+    geom_hline(aes(yintercept=log2(expected)),
+               data=expected[(expected$species=='S.cerevisiae' &
+                                expected$comparison %in% positive_comparisons),],
+               colour=get_cat_palette(1), linetype=2) +
+    ylab('Fold change (log2)') +
+    xlab('Delta scores')
+```
+
+Summarise the fold changes to compare median fold changes over bins of tag intensity and interference
+```{r}
+quant_vs_mean %>% names() %>% lapply(function(x){
+    p <- quant_vs_mean[[x]] %>%
+    filter(Isolation.Interference.in.Percent<=60) %>% # no need to consider interference>=60%
+    filter(species=='S.cerevisiae', !below_notch, comparison=='6 vs 1') %>%
+    group_by(binned_interference, binned_intensity) %>%
+    summarise(median_diff=2^median(diff, na.rm=TRUE), n=length(diff)) %>%
+    ggplot(aes(binned_interference, binned_intensity, fill=median_diff)) +
+    geom_tile(colour='grey') +
+    theme_camprot(base_size=15) +
+    scale_fill_gradient(high=get_cat_palette(2)[2],
+                        low='white',
+                        limits=c(0, 6), name='Observed\nfold change') +
+    theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+    xlab('Binned interference') +
+    ylab('Binned intensity') +
+    ggtitle(x)
+    
+    print(p + geom_text(aes(label=round(median_diff, 1)), size=3))
+    
+    print(p +
+            aes(fill=n) +
+            scale_fill_gradient(high=get_cat_palette(3)[3],
+                                low='white') +
+            geom_text(aes(label=n), size=3) )
+})
+```
+Repeat the above, but also split by Delta
+```{r, fig.height=10, fig.width=10}
+quant_vs_mean %>% names() %>% lapply(function(x){
+    p <- quant_vs_mean[[x]] %>%
+    filter(Isolation.Interference.in.Percent<=60) %>% # no need to consider interference>=60%
+    filter(species=='S.cerevisiae', !below_notch, comparison=='6 vs 1') %>%
+    group_by(binned_interference, binned_intensity, binned_delta) %>%
+    summarise(median_diff=2^median(diff, na.rm=TRUE), n=length(diff)) %>%
+    ggplot(aes(binned_interference, binned_intensity, fill=median_diff)) +
+    geom_tile(colour='grey') +
+    theme_camprot(base_size=10) +
+    scale_fill_gradient(high=get_cat_palette(2)[2],
+                        low='white',
+                        limits=c(0, 6), name='Observed\nfold change') +
+    theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+    xlab('Binned interference') +
+    ylab('Binned intensity') +
+    ggtitle(x) +
+      facet_wrap(~binned_delta)
+    
+    print(p + geom_text(aes(label=round(median_diff, 1)), size=3))
+    
+    print(p +
+            aes(fill=n) +
+            scale_fill_gradient(high=get_cat_palette(3)[3],
+                                low='white') +
+            geom_text(aes(label=n), size=3) )
+})
+```
+
+
+
+
+Let's check how isolation interference and delta interact with tag intensity to impact the PSM-level fold change estimates. We will just focus on PSMs with interference <= 60%.
+```{r, fig.height=7, fig.width=7}
+quant_vs_mean %>% names() %>% lapply(function(x){
+  
+  p <- quant_vs_mean[[x]] %>%
+     # Don't want to consider interference > 60% 
+    filter(species=='S.cerevisiae', Isolation.Interference.in.Percent<=60,
+           !comparison %in% positive_comparisons) %>%
+    ggplot(aes(log2(intensity), diff)) +
+    theme_camprot(base_size=12) +
+    facet_wrap(~comparison, scales='free_y') +
+    geom_hline(aes(yintercept=log2(expected)),
+               data=(expected %>%
+                       filter(species=='S.cerevisiae',
+                              !comparison %in% positive_comparisons)),
+               colour='black', linetype=2) +
+    xlab('Tag intensity (log2)') +
+    ylab('Difference in intensity (log2)') +
+    ggtitle(x)
+  
+  print(p + geom_point(size=0.1, alpha=0.1))
+  print(p + geom_point(size=0.1, alpha=0.1) + geom_smooth(se=FALSE, size=0.5))
+  print(p + geom_point(size=0.1, alpha=0.1, colour='grey80') +
+          geom_smooth(aes(colour=binned_interference), se=FALSE, size=0.5) +
+    scale_colour_manual(values=c(get_cat_palette(6)),
+                        name='Isolation interference (%)'))
+  print(p + geom_point(size=0.1, alpha=0.1, colour='grey80') +
+          geom_smooth(se=FALSE, size=0.5) +
+          facet_grid(binned_delta~comparison))
+  print(p + geom_point(size=0.1, alpha=0.1, colour='grey80') +
+          geom_smooth(aes(colour=binned_delta), se=FALSE, size=0.5) +
+    scale_colour_manual(values=c(get_cat_palette(7)),
+                        name='Delta score'))
+
+  return(NULL)
+})
+```
+Based on the above, I'm going to use the following range of thresholds:
+- Delta >= [0, 0.2, 0.5]
+- Isolation interference <= [10%, 50%, 100%]
+- Signal/Noise <= [0, 10, 100]
+
+OK, so as we expect, the observed fold changes tend towards the truth as tag intensity increases. At very high tag intensities, there is an issue with more PSMs being false identifications so the observed ratios are what we observing is the ratio from a human protein, hence the 'uptick' in ratios for e.g '1 vs 6' at high intensities. We also observe the clear understatimate of ratios when the tag intensity is below the notch. 
+
+We observe that this 'uptick' only occurs when Delta score < 0.5. This fits with the expectation that these PSMs are actually from human peptides, but the rank 1 peptide is a yeast peptide, likly an ortholog. 
+
+We also observe that in the range of tag intensities where the ratio is close to the truth (~2^3 - 2^7), the observed ratio is closer to the truth with low interference (<20%)
+
+Let's plot the tag intensity vs difference in intensity for all interference thresholds
+```{r, eval=FALSE}
+interference_thresholds <- c(10, 50, 100)
+quant_vs_mean %>% names() %>% lapply(function(x){
+  
+    for(int_threshold in interference_thresholds){
+      tmp_data <-  quant_vs_mean[[x]] %>%
+        filter(species!='mixed',
+               !comparison %in% positive_comparisons,
+               Isolation.Interference.in.Percent<=int_threshold)
+      
+      p <- tmp_data %>%
+        ggplot(aes(log2(intensity), diff)) +
+        geom_point(size=0.05, alpha=0.05, colour='grey10') +
+        geom_density2d(size=0.3, colour=get_cat_palette(2)[2]) +
+        theme_camprot(base_size=12) +
+        facet_grid(species~comparison, scales='free_y') +
+        geom_hline(aes(yintercept=log2(expected)),
+                   data=expected[!expected$comparison %in% positive_comparisons,],
+                   colour='black', linetype=2) +
+        xlab('Tag intensity (log2)') +
+        ylab('Difference in intensity (log2)') +
+        ggtitle(sprintf('%s - Interference <= %s', x, int_threshold)) +
+        coord_cartesian(ylim=c(-4,4))
+    
+      print(p)
+  
+  }   
+    return(NULL)
+})
+```
+
+
+Now, let's filter the PSMs against the deinterference and average S/N thresholds +/- notch filtering.
+
+```{r}
+
+delta_thresholds <- c(0, 0.2, 0.5)
+interference_thresholds <- c(10, 50, 100)
+sn_thresholds <- c(0, 10, 100)
+notch_thresholded <- c(TRUE, FALSE)
+
+combinations <- as.list(as.data.frame(t(crossing(
+  delta_thresholds,
+  interference_thresholds,
+  sn_thresholds,
+  notch_thresholded))))
+
+names(combinations) <- lapply(combinations, FUN=function(x){
+  sprintf('%s, %s, %s, %s', x[1], x[2], x[3], x[4])
+})
+
+psm_res_flt <- psm_res %>% lapply(function(x){
+  combinations %>% lapply(function(thresholds){
+
+    delta_threshold <- thresholds[1]
+    interference_threshold <- thresholds[2]
+    sn_threshold<- thresholds[3]
+    notch <- thresholds[4]
+    
+    message(sprintf(paste0('Thresholding with delta > %s, co-isolation <= %s, ',
+                   'average S/N <= %s, notch PSMs removed: %s'),
+            delta_threshold, interference_threshold,
+            sn_threshold, as.character(as.logical(notch))))
+    
+    out <- filter_TMT_PSMs(x, inter_thresh=interference_threshold,
+                           sn_thresh=sn_threshold, verbose=FALSE)
+    
+    out <- out[fData(out)$Delta.Score>=delta_threshold,]
+    
+    if(notch){
+      out <- out[apply(exprs(out), 1, function(x) min(x, na.rm=TRUE))>5.5]
+    }
+  
+    out
+  })
+})
+
+
+```
+
+
+```{r}
+# define datasets to plot intensities, notch per protein and missing values 
+datasets <- c('0, 100, 0, 0') 
+```
+
+```{r}
+
+
+psm_res_flt %>% names() %>% lapply(function(agc){
+  datasets %>% lapply(function(thresholds){
+    print(thresholds)
+    all <- psm_res_flt[[agc]][[thresholds]]
+    print(all)
+    hs <- all[fData(all)$species=='H.sapiens']
+    sc <- all[fData(all)$species=='S.cerevisiae']
+    
+    slices <- list('All'=all, 'H.sapiens'=hs, 'S.cerevisiae'=sc)
+    for(slice in names(slices)){
+      p <- slices[[slice]] %>% plot_TMT_notch() +
+        ggtitle(sprintf('%s\n%s\n%s', agc, thresholds, slice))
+      print(p)
+      
+      p <- slices[[slice]] %>% plot_TMT_notch(facet_by_sample=TRUE) +
+        ggtitle(sprintf('%s\n%s\n%s', agc, thresholds, slice))
+      print(p)
+    } 
+    return(NULL)
+    
+    })
+  
+  
+  return(NULL)
+})
+
+```
+
+
+Tallies for fraction sub-notch PSMs per protein
+```{r}
+
+psm_res_flt %>% names() %>% lapply(function(agc){
+  datasets %>% lapply(function(thresholds){
+
+    all <- psm_res_flt[[agc]][[thresholds]]
+    hs <- all[fData(all)$species=='H.sapiens']
+    sc <- all[fData(all)$species=='S.cerevisiae']
+    
+    slices <- list('All'=all, 'H.sapiens'=hs, 'S.cerevisiae'=sc)
+    for(slice in names(slices)){
+      
+      notch_per_protein <- get_notch_per_protein(slices[[slice]]) %>%
+        filter(fraction_below>0)
+      
+      p <- plot_fraction_below_notch_per_prot(notch_per_protein) +
+        ggtitle(sprintf('%s\n%s\n%s', agc, thresholds, slice))
+      
+      print(p)
+    }
+    
+    return(NULL)
+  })
+  
+  return(NULL)
+  
+})
+
+
+```
+
+
+Missing values frequencies.
+```{r}
+psm_res_flt %>% names() %>% lapply(function(agc){
+  datasets %>% lapply(function(thresholds){
+
+    all <- psm_res_flt[[agc]][[thresholds]]
+    hs <- all[fData(all)$species=='H.sapiens']
+    sc <- all[fData(all)$species=='S.cerevisiae']
+    
+    slices <- list('All'=all, 'H.sapiens'=hs, 'S.cerevisiae'=sc)
+    for(slice in names(slices)) plotNA(slices[[slice]], pNA = 0)
+
+    return(NULL)
+  })
+  
+  return(NULL)
+  
+})
+
+
+
+```
+
+Save out objects for downstream notebooks
+```{r}
+saveRDS(quant_vs_mean, '../results/quant_vs_mean.rds')
+saveRDS(psm_res_flt, '../results/psm_res_flt.rds')
+saveRDS(expected, '../results/expected.rds')
+```
+
+
