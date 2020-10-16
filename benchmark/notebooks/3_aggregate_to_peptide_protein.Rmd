@@ -1,0 +1,216 @@
+---
+title: 'Aggregate to protein'
+author:
+  - name: "Tom Smith"
+    affiliation: "Cambridge Centre for Proteomics"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+abstract: | 
+  Here, aggregate the PSM-level abundances to peptide-level and protein-level
+  abundances and re-inspect the fold changes
+output:
+  pdf_document:
+  html_notebook: default
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+---
+
+Load libraries
+```{r setup, message=FALSE}
+
+#### Load packages ####
+library(camprotR)
+library(ggplot2)
+library(tidyverse)
+library(MSnbase)
+```
+
+Read in PSM-level quant and expected fold changes
+```{r}
+psm_res_flt <- readRDS('../results/psm_res_flt.rds')
+expected <- readRDS('../results/expected.rds')
+```
+
+Function to aggregate PSMs to peptide or protein-level abundances
+```{r}
+aggregate_psms <- function(psm, level='peptide'){
+  
+  if(level=='peptide'){
+    feature_name <- 'Sequence'
+    min_features <- 1
+  } else{
+    feature_name <- 'Master.Protein.Accessions'
+    min_features <- 2
+  }
+  
+  psm_filt <- psm %>% 
+    MSnbase::filterNA(pNA = 0) %>% # remove PSMs with missing values 
+    restrict_features_per_protein(min_features = min_features, # remove proteins with <2 PSMs
+                                  master_protein_col=feature_name, plot=FALSE) 
+  
+  group <- MSnbase::fData(psm_filt)[[feature_name]]
+
+  agg <- psm_filt %>% MSnbase::combineFeatures(groupBy = group, method = 'sum')
+
+  feature_counts <- count_features_per_protein(psm_filt)
+  
+  return(list('agg'=agg, 'feature_counts'=feature_counts))
+}
+```
+
+
+Aggregate to protein-level abundance
+```{r}
+
+prot_res <- psm_res_flt %>% lapply(function(agc_target){
+  agc_target %>% lapply(function(thresholded_psms){
+  
+    # log center-median normalise PSMs before aggregation
+    x <- thresholded_psms %>% log(base=2) %>%
+      MSnbase::normalise(method='diff.median')
+    exprs(x) <- 2^exprs(x) # then exponentiate to get untransformed intensities
+    
+    aggregate_psms(x, level='protein')
+  })
+})
+
+```
+
+
+
+
+Aggregate to peptide-level abundance
+```{r}
+
+pep_res <- psm_res_flt %>% lapply(function(agc_target){
+  
+  agc_target %>% lapply(function(thresholded_psms){
+  
+    # log center-median normalise PSMs before aggregation
+    x <- thresholded_psms %>% log(base=2) %>%
+      MSnbase::normalise(method='diff.median')
+    exprs(x) <- 2^exprs(x) # then exponentiate to get untransformed intensities
+    
+    aggregate_psms(x, level='peptide')
+  })
+    
+})
+
+
+
+
+```
+
+
+How many proteins per AGC target and threshold parameters are retained.
+```{r}
+
+  
+plot_n_features <- function(obj, feature_name='Proteins'){
+  p <- obj %>%
+    lapply(function(x) lapply(x, function(y) nrow(y$agg))) %>% unlist() %>%
+    data.frame() %>% setNames('n_proteins') %>%
+    tibble::rownames_to_column('threshold') %>%
+    separate(threshold, into=c('agc', 'interference', 'mean_sn', 'notch'), sep='\\.|, ') %>%
+    mutate(notch=recode(notch, '1'='With notch filt', '0'='Without notch filt.')) %>%
+    ggplot(aes(interference, mean_sn, fill=n_proteins, label=n_proteins)) +
+    geom_tile() +
+    theme_camprot(base_size=15) +
+    facet_grid(notch~agc) +
+    geom_text() +
+    scale_fill_gradient(low='grey90', high=get_cat_palette(1), name=feature_name) +
+    xlab('Maximum inteference (%)') +
+    ylab('Minimum mean signal/noise')
+  
+  print(p)
+}
+
+prot_res %>% plot_n_features()
+pep_res %>% plot_n_features('Peptides')
+```
+```{r}
+saveRDS(prot_res, '../results/prot_res.rds')
+saveRDS(pep_res, '../results/pep_res.rds')
+```
+
+*Can re-run cells below without re-aggregating if required*
+```{r}
+prot_res <- readRDS('../results/prot_res.rds')
+pep_res <- readRDS('../results/pep_res.rds')
+```
+
+Get fold changes for protein and peptide-level abundances.
+```{r}
+source('../R/get_quant_vs_mean.R')
+```
+
+Plot protein-level tag vs group fold changes
+```{r}
+summarisations <- list('protein'=prot_res, 'peptide'=pep_res)
+```
+
+```{r}
+# define thresholds to plot fold changes. Each set of threshold will be plotted at peptide and protein level, with both AGC settings
+datasets <- c('100, 0, 0') 
+```
+
+
+```{r}
+summarisations %>% names() %>% lapply(function(level){
+  
+  summarisations[[level]] %>% names() %>% lapply(function(agc){
+    
+    datasets %>% lapply(function(thresholds){
+        
+      if(level=='protein'){
+        feature_name <- 'Master.Protein.Accessions'
+      } else{
+        feature_name <- 'Sequence'
+      }
+      
+      x <- get_notch_per_protein(psm_res_flt[[agc]][[thresholds]],
+                                 master_prot_col=feature_name) %>%
+        mutate(sample=remove_x(sample))
+      y <-  get_quant_vs_mean(summarisations[[level]][[agc]][[thresholds]]$agg)
+      
+      to_plot <- merge(x, y,
+                       by.x=c(feature_name, 'sample'),
+                       by.y=c('id', 'tag')) %>%
+        filter(species!='mixed')
+      
+      p <- to_plot  %>%
+        ggplot(aes(log2(intensity), diff)) +
+          theme_camprot(base_size=12) +
+          facet_grid(species~comparison) +
+          geom_hline(aes(yintercept=log2(expected)),
+                     data=expected,
+                     colour='black', linetype=2) +
+          xlab(sprintf('%s abundance (log2)', level)) +
+          ylab('Difference in abundnace (log2)') +
+          ggtitle(sprintf('%s - %s - %s', agc, thresholds, level))
+    
+      suppressWarnings(print(p + geom_point(size=0.2, alpha=0.1, colour='grey30')))
+    
+      suppressWarnings(print(p %+% to_plot[to_plot$fraction_below>0,] +
+              aes(fraction_below) +
+              geom_point(size=0.5, alpha=0.5) +
+               geom_smooth() +
+              xlab('Fraction PSMs below notch')))
+      return(NULL)
+      
+    })
+    
+    return(NULL)
+    
+  
+  })
+  
+  return(NULL)
+  
+})
+```
+
+
+
+
+
