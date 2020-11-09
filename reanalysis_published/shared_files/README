@@ -1,0 +1,6 @@
+Reference fasta files downloaded from Uniprot:
+
+https://www.uniprot.org/uniprot/?query=*&fil=proteome%3AUP000002311+AND+reviewed%3Ayes+AND+organism%3A%22Saccharomyces+cerevisiae+%28strain+ATCC+204508+%2F+S288c%29+%28Baker%27s+yeast%29+%5B559292%5D%22
+reviewed:yes AND organism:"Saccharomyces cerevisiae (strain ATCC 204508 / S288c) (Baker's yeast) [559292]" AND proteome:up000002311
+
+https://www.uniprot.org/uniprot/?query=*&fil=proteome%3AUP000005640+AND+reviewed%3Ayes+AND+organism%3A%22Homo+sapiens+%28Human%29+%5B9606%5D%22

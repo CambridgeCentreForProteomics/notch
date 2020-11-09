@@ -1,0 +1,205 @@
+---
+title: "Parse PSMs"
+author:
+  - name: "Tom Smith"
+    affiliation: "Cambridge Centre for Proteomics"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+abstract: | 
+  Here, we parse the PSM-level PD output
+output:
+  pdf_document:
+  html_notebook: default
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+---
+
+Load libraries
+```{r setup, message=FALSE}
+
+#### Load packages ####
+library(camprotR)
+library(tidyverse)
+library(MSnbase)
+```
+
+Read in PSM data
+```{r}
+infiles <- Sys.glob('../raw/*gz')
+names(infiles) <- gsub('_PSMs_txt.gz', '', basename(infiles))
+psm <- infiles %>% lapply(read.delim)
+print(infiles)
+```
+
+Make the cRAP list for filtering
+```{r}
+get_fasta_ids <- function(fasta){
+  # Load the FASTA 
+  bs.fasta <- Biostrings::fasta.index(fasta, seqtype = "AA")
+  
+  # Extract the UniProt accessions 
+  accessions <- bs.fasta %>% 
+    pull(desc) %>% 
+    stringr::str_extract_all("(?<=\\|).*?(?=\\|)") %>% 
+    unlist()
+
+  accessions
+}
+
+crap.accessions <- get_fasta_ids('../shared_files/cRAP_FullIdentifiers.fasta')
+
+
+```
+
+Match species to uniprotID
+```{r}
+hs.accessions <- get_fasta_ids(
+  '../shared_files/h.sapiens_UP0000065640.fasta.gz')
+sc.accessions <- get_fasta_ids(
+  '../shared_files/s.cerevisiae_UP000002311.fasta.gz')
+
+uniprot_2_species <- data.frame('id'=c(hs.accessions, sc.accessions),
+                                'species'=c(rep('H.sapiens', length(hs.accessions)),
+                                            rep('S.cerevisiae', length(sc.accessions))))
+head(uniprot_2_species)
+```
+
+Parse and filter PSMs to remove cRAP proteins
+```{r}
+print(names(psm))
+psm_parsed <- psm %>% lapply(function(x){
+  parse_features(x, TMT=TRUE, level='PSM',
+                 crap_proteins=crap.accessions, unique_master=FALSE)
+})
+```
+Annotated the data with the species
+```{r}
+psm_parsed_annt <- psm_parsed %>% lapply(function(x){
+  
+ species_matches <- x %>% select(Protein.Accessions) %>%
+  mutate(Protein.Accessions_sep=Protein.Accessions) %>%
+  separate_rows(Protein.Accessions_sep) %>%
+  merge(uniprot_2_species, by.x='Protein.Accessions_sep', by.y='id', all.x=TRUE) %>%
+  group_by(Protein.Accessions) %>%
+  summarise(all_species=paste0(unique(species), collapse='; ')) %>%
+  mutate(species=ifelse(grepl(';', all_species), 'mixed', all_species))
+ 
+ x %>% merge(species_matches, by='Protein.Accessions')
+})
+```
+Checking the above hasn't altered `nrow`
+```{r}
+psm_parsed %>% names() %>%
+  sapply(function(x){
+  print(nrow(psm_parsed[[x]]))
+  nrow(psm_parsed_annt[[x]])
+})
+```
+
+Summarise PSMs per species for Oconnell et al data
+```{r}
+x <- 'Oconnell'
+
+p1 <- psm_parsed_annt[[x]] %>%
+  group_by(species) %>%
+  tally() %>%
+  ggplot(aes(species, n)) +
+  geom_bar(stat='identity') +
+  theme_camprot() +
+  xlab('') +
+  ylab('PSMs') +
+  ggtitle(x)
+
+p2 <- psm_parsed_annt[[x]] %>%
+  select(Master.Protein.Accessions, species) %>%
+  unique() %>%
+  group_by(species) %>% tally() %>%
+  ggplot(aes(species, n)) +
+  geom_bar(stat='identity') +
+  theme_camprot() +
+  xlab('') +
+  ylab('Proteins') +
+  ggtitle(x)
+
+print(p1)
+print(p2)
+
+ggsave(sprintf('../results/plots/%s_psm_n.png', gsub('AGC: ', '', x)), p1)
+ggsave(sprintf('../results/plots/%s_proteins_n.png', gsub('AGC: ', '', x)), p2)
+  
+```
+
+
+Make MSnSets
+```{r}
+
+psm_res <- psm_parsed_annt %>% lapply(function(x){
+  # Abundance columns for TMT PD-output start with Abundance 
+  abundance_cols <- colnames(x)[grepl('Abundance.', colnames(x))]
+  
+  .e <- as.matrix(x[,abundance_cols])
+  .f <- x[,setdiff(colnames(x), abundance_cols)]
+  
+  # update the column names to remove the 'Abundance.` prefix
+  colnames(.e) <- gsub('Abundance.', '', colnames(.e))
+  
+  res <- MSnbase::MSnSet(exprs=.e, fData=.f)
+  
+  res
+})
+```
+
+Plotting the distribution of tag intensities in each full dataset and the single species subsets. Note that the tag intensities for yeast fall into the 3 groups we expect given the experimental design.
+```{r}
+
+psm_res %>% names() %>% lapply(function(x){
+  
+  all <- psm_res[[x]]
+  if(x == 'Oconnell_PSMs.txt.gz'){
+    hs <- all[fData(all)$species=='H.sapiens']
+    sc <- all[fData(all)$species=='S.cerevisiae']
+  
+    slices <- list('All'=all, 'H.sapiens'=hs, 'S.cerevisiae'=sc)}
+  else{ slices <- list('All'=all) }
+  
+  for(slice in names(slices)){
+    p <- slices[[slice]] %>% log(base=2) %>% plot_quant() +
+      ggtitle(sprintf('%s - %s', x, slice)) +
+      ylab('PSM intensity (log2)')
+    print(p)
+    
+    p <- slices[[slice]] %>% log(base=2) %>% plot_quant(method='density') +
+      xlab('PSM intensity (log2)') +
+      ggtitle(sprintf('%s - %s', x, slice))
+    print(p)
+  }
+  return(NULL)
+})
+
+```
+
+Below, we compare the Delta score and isolation interference distributions for each dataset
+```{r}
+psm_metrics <-psm_res %>% names() %>% lapply(function(x){
+  fData(psm_res[[x]])[,c('DeltaScore', 'Isolation.Interference....')] %>% mutate(name=x)
+  }) %>% do.call(what='rbind')
+```
+
+```{r}
+p <- psm_metrics %>%
+  ggplot(aes(DeltaScore, colour=name)) +
+  geom_density() +
+  theme_camprot(base_size=15)
+
+print(p)
+print(p + aes(Isolation.Interference....))
+```
+
+
+Save for downstream notebooks
+```{r}
+saveRDS(psm_res, '../results/psm_res.rds')
+```
+
+
+

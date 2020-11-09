@@ -1,0 +1,42 @@
+---
+title: "Plots notches"
+author:
+  - name: "Tom Smith"
+    affiliation: "Cambridge Centre for Proteomics"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+abstract: | 
+  Here, we plot the notches per dataset
+output:
+  pdf_document:
+  html_notebook: default
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+---
+
+Load libraries
+```{r setup, message=FALSE}
+
+#### Load packages ####
+library(camprotR)
+library(ggplot2)
+library(tidyverse)
+library(MSnbase)
+```
+
+```{r}
+psm_res <- readRDS('../results/psm_res.rds')
+```
+
+```{r}
+psm_res %>% names() %>% lapply(function(x){
+  p1 <- plot_TMT_notch(psm_res[[x]]) + ggtitle(x)
+  p2 <- plot_TMT_notch(psm_res[[x]], facet_by_sample=TRUE) + ggtitle(x)
+  print(p1)
+  print(p2)
+  return(NULL)
+})
+```
+
+
+  

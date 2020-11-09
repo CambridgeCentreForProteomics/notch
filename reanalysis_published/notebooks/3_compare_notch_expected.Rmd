@@ -1,0 +1,252 @@
+---
+title: "Parse PSMs"
+author:
+  - name: "Tom Smith"
+    affiliation: "Cambridge Centre for Proteomics"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+abstract: | 
+  Here, we compare expected to observed tag intensities.
+output:
+  pdf_document:
+  html_notebook: default
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
+---
+
+
+
+Load libraries
+```{r setup, message=FALSE}
+
+#### Load packages ####
+library(camprotR)
+library(ggplot2)
+library(tidyverse)
+library(MSnbase)
+
+
+notch_lower <- 4.25
+notch_upper <- 6
+```
+
+```{r}
+psm_res <- readRDS('../results/psm_res.rds')
+```
+
+First, we need a function to predict TMT tag intensities. This is based on the assumption that PSMs from the same sequence should have the same relative abundances, but with a shift in overall intensity  
+```{r}
+PredictPSMTagIntensity <- function(obj,
+                                   min_intensity_threshold=6,
+                                   id_column="Annotated.Sequence"){
+  
+  melt_tag_intensities <- function(obj){
+    obj %>%
+      data.frame() %>%
+      tibble::rownames_to_column('PSM_id') %>%
+      gather(key='tag', value='intensity', -PSM_id)
+  }
+
+  psm_counts <- table(fData(obj)[[id_column]])
+
+  # Identify the seqeuences with multiple PSMs
+  multiple_psm_seqs <- names(psm_counts)[psm_counts>1]
+
+  # set up empty list to populate below
+  all_pred_obs <- vector("list", length=length(multiple_psm_seqs))
+  names(all_pred_obs) <- multiple_psm_seqs
+
+  for(id in multiple_psm_seqs){
+    
+    .e <- exprs(obj)[fData(obj)[[id_column]]==id,]
+    psm_sum_intensity <- rowSums(.e, na.rm=TRUE)
+    missing_matrix <- is.finite(.e)
+    max_psm <- names(sort(psm_sum_intensity, decreasing=TRUE))[1]
+    
+    .e_max <- .e[max_psm,]
+    
+    # If the PSM contains missing values, skip
+    if(any(is.na(.e_max))){
+      next()
+    }
+    
+    # If the PSM contains values below the minimum intensity threshold, skip
+    if(any(.e_max<min_intensity_threshold)){
+      next()
+    }
+    
+    # Identify intensity adjustment factors
+    na_adj_psm_sum_intensity <- rowSums(t(t(missing_matrix) * .e_max))
+    intensity_adjustments <- na_adj_psm_sum_intensity/sum(.e_max)
+    
+    # sum normalise the reference profile
+    .e_max_profile <- .e_max/sum(.e_max)
+    
+    # predict the expected profiles for non-reference PSMs based on their
+    # intensity and the reference profile alone
+    .e_pred <- outer((psm_sum_intensity / intensity_adjustments), .e_max_profile)
+    .e_obs <- .e
+    
+    # return the predictions and observations
+    pred_obs <- merge(melt_tag_intensities(.e_pred), melt_tag_intensities(.e_obs),
+                      by=c("PSM_id", "tag")) %>%
+      filter(PSM_id!=max_psm) %>%
+      mutate("sequence"=id)
+
+    colnames(pred_obs)[1:4] <- c('psm_id', 'Sample', 'pred', 'obs')
+    all_pred_obs[[id]] <- pred_obs
+
+  }
+
+  return(all_pred_obs)
+}
+```
+
+
+```{r}
+
+pred_obs <- psm_res %>% lapply(function(x){
+  
+  all_pred_obs_df <- PredictPSMTagIntensity(x) %>%
+    do.call(what='rbind')
+  
+  all_pred_obs_df <- all_pred_obs_df %>%
+      data.frame() %>%
+      mutate(Sample=remove_x(Sample)) %>%
+      merge(fData(x), by.x='psm_id', by.y='row.names')
+
+  # Remove predictions below minimum observed since this would be expected to be under the limit of detection
+  min_obs_intensity <- min(exprs(x), na.rm=TRUE)
+  
+  print(c(sum(!is.na(all_pred_obs_df$pred)),
+          sum(all_pred_obs_df$pred<min_obs_intensity, na.rm=TRUE)))
+  
+  all_pred_obs_df <- all_pred_obs_df %>% filter(pred>=min_obs_intensity)
+  
+  all_pred_obs_df
+})
+```
+
+```{r}
+plot_correlation <- function(obj, colours=get_cat_palette(7), include_tls=FALSE){
+  if(include_tls){
+    pca <- data.frame(x=log2(obj$pred), y=log2(obj$obs)) %>%
+      filter(is.finite(x), is.finite(y)) %>%
+      prcomp()#formula=~x+y)
+    slp <- with(pca, rotation[2,1] / rotation[1,1])
+    int <- with(pca, center[2] - slp*center[1])
+  }
+  
+  axis_min <- min(log2(c(obj$pred, obj$obs)), na.rm=TRUE)
+  axis_max <- max(log2(c(obj$pred, obj$obs)), na.rm=TRUE)
+  
+  pred_vs_obs_tag_int <- obj %>%
+    filter(is.finite(obs)) %>%
+    ggplot(aes(log2(pred), log2(obs))) +
+    geom_point(size=0.05, alpha=0.1, colour='grey30') +
+    geom_hline(yintercept=log2(notch_lower), size=0.5, colour=colours[2], linetype=2) +
+    geom_hline(yintercept=log2(notch_upper), size=0.5, colour=colours[1], linetype=2) +
+    geom_abline(slope=1, size=0.5, colour=colours[3]) +
+    theme_camprot() +
+    ylab('Predicted intensity') +
+    xlab('Observed intensity') +
+    scale_y_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max)) +
+    scale_x_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max))
+
+  if(include_tls){
+    pred_vs_obs_tag_int <- pred_vs_obs_tag_int +
+      geom_abline(slope=slp, intercept=int, color=colours[4])
+  }
+  
+  pred_vs_obs_tag_int_per_sample <- pred_vs_obs_tag_int +
+    facet_wrap(~Sample) +
+    theme_camprot(base_size=10) +
+    coord_cartesian(xlim=c(NA, 6), ylim=c(NA, 6))
+    
+  
+  return(list('pred_vs_obs_tag_int'=pred_vs_obs_tag_int,
+              'pred_vs_obs_tag_int_per_sample'=pred_vs_obs_tag_int_per_sample))
+}
+```
+
+```{r}
+
+pred_obs %>% names() %>% lapply(function(x){
+  plots <- plot_correlation(pred_obs[[x]])
+  print(plots$pred_vs_obs_tag_int + ggtitle(x))
+  print(plots$pred_vs_obs_tag_int_per_sample + ggtitle(x))
+})
+```
+
+```{r}
+plot_pred_bias <- function(obj, colours=get_cat_palette(7)){
+  pred_vs_bias <- obj %>%
+      mutate(binned_intensity=as.numeric(as.character(
+        Hmisc::cut2(log2(obs), g=80, levels.mean=TRUE))),
+        binned_prediction=as.numeric(as.character(
+        Hmisc::cut2(log2(pred), g=80, levels.mean=TRUE)))) %>%
+      mutate(present=is.finite(obs), obs_lower=as.numeric(obs<pred))
+    
+    pred_vs_bias_all <- pred_vs_bias %>%
+      group_by(binned_intensity) %>%
+      summarise('n_obs_lower'=sum(obs_lower, na.rm=TRUE),
+                'n_obs'=sum(present), 'n'=length(obs))
+    
+    pred_vs_bias_per_sample <- pred_vs_bias %>%
+      group_by(binned_intensity, Sample) %>%
+      summarise('n_obs_lower'=sum(obs_lower, na.rm=TRUE),
+                'n_obs'=sum(present), 'n'=length(obs))
+    
+    p_pred_bias <- pred_vs_bias_all %>%
+      filter(binned_intensity<7.5) %>%
+      ggplot(aes(binned_intensity, n_obs_lower/n_obs)) +
+      geom_vline(xintercept=log2(notch_lower), size=0.5, colour=colours[2], linetype=2) +
+      geom_vline(xintercept=log2(notch_upper), size=0.5, colour=colours[1], linetype=2) +
+      geom_point() +
+      theme_camprot() +
+      xlab('Predicted intensity (log2)') +
+      ylab('Fraction Observed<Predicted') +
+      scale_y_continuous(limits=c(0,1), breaks=seq(0,1,.25))
+    
+    p_pred_bias_per_sample <- p_pred_bias %+%
+      (pred_vs_bias_per_sample %>% filter(binned_intensity<7.5)) +
+      facet_wrap(~Sample) +
+      theme_camprot(base_size=10)
+
+  return(list('p_pred_bias'=p_pred_bias, 'p_pred_bias_per_sample'=p_pred_bias_per_sample, 'pred_vs_bias'=pred_vs_bias))
+}
+```
+
+```{r}
+pred_bias <- pred_obs %>% names() %>% lapply(function(x){
+  plots <- plot_pred_bias(pred_obs[[x]])
+  print(plots$p_pred_bias + ggtitle(x))
+  print(plots$p_pred_bias_per_sample + ggtitle(x))
+  return(plots$pred_vs_bias)
+})
+
+names(pred_bias) <- names(pred_obs)
+```
+
+
+```{r}
+colours <- get_cat_palette(2)
+for(name in names(pred_bias)){
+  p <- pred_bias[[name]] %>%
+    group_by(binned_prediction) %>%
+    summarise(fraction_missing=mean(as.numeric(!present))) %>%
+    ggplot(aes(binned_prediction, 100*fraction_missing)) +
+    geom_point() +
+    theme_camprot() +
+    geom_vline(xintercept=log2(notch_lower), size=0.5, colour=colours[2], linetype=2) +
+    geom_vline(xintercept=log2(notch_upper), size=0.5, colour=colours[1], linetype=2) +
+    ggtitle(name) +
+    xlab('Predicted intensity (log2)') +
+    ylab('Missing values (%)')
+  
+  print(p)
+}
+```
+
+
+

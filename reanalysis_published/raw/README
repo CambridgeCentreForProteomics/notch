@@ -1,0 +1,23 @@
+The data from the following papers was downloaded and re-processed in PD. Output files from PD are in this directory
+
+Proteome-Wide Evaluation of Two Common Protein Quantification Methods
+Jeremy D. O’Connell, Joao A. Paulo, Jonathon J. O’Brien, and Steven P. Gygi* 2018
+
+PRIDE: PXD007683
+https://www.ebi.ac.uk/pride/archive/projects/PXD007683
+
+Experimental design:
+1-3=10% yeast
+4-7=5%
+8-11=3.33%
+
+
+
+Geladaki & Britovšek et al 2019
+U2OS LOPIT-DC
+https://www.ncbi.nlm.nih.gov/pubmed/30659192
+
+PRIDE: PXD011254
+
+ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2019/01/PXD011254
+Use all LOPIT-DC datasets present
