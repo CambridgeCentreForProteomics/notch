@@ -20,10 +20,10 @@ Load libraries
 
 #### Load packages ####
 library(camprotR)
-library(ggplot2)
 library(tidyverse)
 library(MSnbase)
 library(biobroom)
+library(gtools)
 ```
 
 Read in the PSM data
@@ -77,6 +77,7 @@ quant_vs_mean %>% lapply(dim)
 ```
 ```{r}
 plot(density(quant_vs_mean$`AGC: 5E4`$Delta.Score))
+plot(density(quant_vs_mean$`AGC: 5E4`$Isolation.Interference.in.Percent))
 ```
 
 ```{r}
@@ -121,7 +122,7 @@ get_ground_truth <- function(sc_spikes, hs_spikes, ix_1, ix_2){
   sc_ground_truth <- sc_spikes[ix_2]/sc_spikes[ix_1]
   return(c(comparison, hs_ground_truth, sc_ground_truth))
 }
-library(gtools)
+
 
 expected <- apply(permutations(n=3,r=2), 1, function(x){
   get_ground_truth(sc_spikes, hs_spikes, x[1], x[2])
@@ -302,14 +303,17 @@ Based on the above, I'm going to use the following range of thresholds:
 
 OK, so as we expect, the observed fold changes tend towards the truth as tag intensity increases. At very high tag intensities, there is an issue with more PSMs being false identifications so the observed ratios are what we observing is the ratio from a human protein, hence the 'uptick' in ratios for e.g '1 vs 6' at high intensities. We also observe the clear understatimate of ratios when the tag intensity is below the notch. 
 
-We observe that this 'uptick' only occurs when Delta score < 0.5. This fits with the expectation that these PSMs are actually from human peptides, but the rank 1 peptide is a yeast peptide, likly an ortholog. 
+We observe that this 'uptick' only occurs when Delta score < 0.5. This fits with the expectation that these PSMs are actually from human peptides, but the rank 1 peptide is a yeast peptide, likely an ortholog. 
 
 We also observe that in the range of tag intensities where the ratio is close to the truth (~2^3 - 2^7), the observed ratio is closer to the truth with low interference (<20%)
 
 Let's plot the tag intensity vs difference in intensity for all interference thresholds
-```{r, eval=FALSE}
+
+
+```{r}
+
 interference_thresholds <- c(10, 50, 100)
-quant_vs_mean %>% names() %>% lapply(function(x){
+for(x in names(quant_vs_mean)){
   
     for(int_threshold in interference_thresholds){
       tmp_data <-  quant_vs_mean[[x]] %>%
@@ -328,18 +332,15 @@ quant_vs_mean %>% names() %>% lapply(function(x){
                    colour='black', linetype=2) +
         xlab('Tag intensity (log2)') +
         ylab('Difference in intensity (log2)') +
-        ggtitle(sprintf('%s - Interference <= %s', x, int_threshold)) +
         coord_cartesian(ylim=c(-4,4))
     
-      print(p)
-  
+      print(p + ggtitle(sprintf('%s - Interference <= %s', x, int_threshold)))
   }   
-    return(NULL)
-})
+}
 ```
 
 
-Now, let's filter the PSMs against the deinterference and average S/N thresholds +/- notch filtering.
+Now, let's filter the PSMs against the interference and average S/N thresholds +/- notch filtering.
 
 ```{r}
 
@@ -359,6 +360,10 @@ names(combinations) <- lapply(combinations, FUN=function(x){
 })
 
 psm_res_flt <- psm_res %>% lapply(function(x){
+  
+  x <- x %>% log(base=2) %>% MSnbase::normalise(method='diff.median')
+  exprs(x) <- 2^exprs(x)
+    
   combinations %>% lapply(function(thresholds){
 
     delta_threshold <- thresholds[1]
@@ -377,7 +382,7 @@ psm_res_flt <- psm_res %>% lapply(function(x){
     out <- out[fData(out)$Delta.Score>=delta_threshold,]
     
     if(notch){
-      out <- out[apply(exprs(out), 1, function(x) min(x, na.rm=TRUE))>5.5]
+      out <- out[apply(exprs(out), 1, function(x) min(x, na.rm=TRUE))>log2(5.75)]
     }
   
     out
@@ -389,8 +394,44 @@ psm_res_flt <- psm_res %>% lapply(function(x){
 
 
 ```{r}
+dim(psm_res_flt$`AGC: 5E4`$`0.5, 10, 0, 0`)
+
+for(x in names(quant_vs_mean)){
+  
+    tmp_data <-  quant_vs_mean[[x]] %>%
+      filter(species!='mixed',
+             !comparison %in% positive_comparisons,
+             Isolation.Interference.in.Percent<=10,
+             Delta.Score>=0.5)
+    
+    tmp_data_for_smooth <- tmp_data %>%
+      filter(species=='H.sapiens' | ((species=='S.cerevisiae' & intensity < 2^6.5)))
+
+    p <- tmp_data %>%
+      ggplot(aes(log2(intensity), diff)) +
+      geom_point(size=0.05, alpha=0.05, colour='grey10') +
+      geom_smooth(data=tmp_data_for_smooth, aes(log2(intensity), diff)) +
+      theme_camprot(base_size=12) +
+      facet_grid(species~comparison, scales='free_y') +
+      geom_hline(aes(yintercept=log2(expected)),
+                 data=expected[!expected$comparison %in% positive_comparisons,],
+                 colour='grey', linetype=2) +
+      xlab('Reporter ion intensity (log2)') +
+      ylab('Difference in intensity (log2)') +
+      coord_cartesian(ylim=c(-5,3))
+    
+    ggsave(sprintf('../results/plots/%s_psm_fold_changes.png', gsub('[: ]', '', x)), p)
+    
+    print(p + ggtitle(x))
+
+}
+```
+
+```{r}
 # define datasets to plot intensities, notch per protein and missing values 
-datasets <- c('0, 100, 0, 0') 
+datasets <- list(c('0, 100, 0, 0'), c('0.5, 10, 0, 0')) 
+datasets <- list(c('0, 100, 0, 0')) 
+
 ```
 
 ```{r}
@@ -407,13 +448,21 @@ psm_res_flt %>% names() %>% lapply(function(agc){
     slices <- list('All'=all, 'H.sapiens'=hs, 'S.cerevisiae'=sc)
     for(slice in names(slices)){
       p <- slices[[slice]] %>% plot_TMT_notch() +
+        xlab('Reporter ion intensity (log2)') +
         ggtitle(sprintf('%s\n%s\n%s', agc, thresholds, slice))
       print(p)
       
-      p <- slices[[slice]] %>% plot_TMT_notch(facet_by_sample=TRUE) +
+      p2 <- slices[[slice]] %>% plot_TMT_notch(facet_by_sample=TRUE) +
+        xlab('Reporter ion intensity (log2)') +
         ggtitle(sprintf('%s\n%s\n%s', agc, thresholds, slice))
-      print(p)
-    } 
+      print(p2)
+
+      if(agc=='AGC: 5E4'){
+        ggsave(sprintf('../results/plots/%s_ion_intensities.png', slice), p)
+        ggsave(sprintf('../results/plots/%s_ion_intensities_per_tag.png', slice), p2)
+      }
+    }
+    
     return(NULL)
     
     })
@@ -427,6 +476,7 @@ psm_res_flt %>% names() %>% lapply(function(agc){
 
 Tallies for fraction sub-notch PSMs per protein
 ```{r}
+datasets <- list(c('0.5, 10, 0, 0'))
 
 psm_res_flt %>% names() %>% lapply(function(agc){
   datasets %>% lapply(function(thresholds){
@@ -439,12 +489,28 @@ psm_res_flt %>% names() %>% lapply(function(agc){
     for(slice in names(slices)){
       
       notch_per_protein <- get_notch_per_protein(slices[[slice]]) %>%
-        filter(fraction_below>0)
+         mutate(sample=factor(remove_x(sample), colnames(slices[[slice]])))
       
-      p <- plot_fraction_below_notch_per_prot(notch_per_protein) +
-        ggtitle(sprintf('%s\n%s\n%s', agc, thresholds, slice))
+      print(notch_per_protein %>%
+        group_by(sample, fraction_below>=0.25) %>%
+        tally())
       
-      print(p)
+      p <- notch_per_protein %>%
+        filter(fraction_below>0) %>% 
+        ggplot(aes(.data$fraction_below)) +
+        geom_histogram(bins = 10) + 
+        theme_camprot(base_size = 10) +
+        facet_wrap(~sample) + 
+        xlab("Fraction at/below notch PSMs") +
+        ylab("Proteins") +
+        scale_x_continuous(breaks=seq(0,1,0.5))
+        
+      
+      print(p + ggtitle(sprintf('%s\n%s\n%s', agc, thresholds, slice)))
+      
+      if(agc=='AGC: 5E4' & slice=='All'){
+        ggsave('../results/plots/fraction_sub_notch.png', p)
+      }
     }
     
     return(NULL)

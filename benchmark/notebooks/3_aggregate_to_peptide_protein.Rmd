@@ -29,6 +29,9 @@ Read in PSM-level quant and expected fold changes
 ```{r}
 psm_res_flt <- readRDS('../results/psm_res_flt.rds')
 expected <- readRDS('../results/expected.rds')
+
+positive_comparisons <- expected %>% filter(species=='S.cerevisiae', expected>1) %>%
+  pull(comparison)
 ```
 
 Function to aggregate PSMs to peptide or protein-level abundances
@@ -45,7 +48,7 @@ aggregate_psms <- function(psm, level='peptide'){
   
   psm_filt <- psm %>% 
     MSnbase::filterNA(pNA = 0) %>% # remove PSMs with missing values 
-    restrict_features_per_protein(min_features = min_features, # remove proteins with <2 PSMs
+    restrict_features_per_protein(min_features = min_features, # remove features with <2 PSMs
                                   master_protein_col=feature_name, plot=FALSE) 
   
   group <- MSnbase::fData(psm_filt)[[feature_name]]
@@ -66,11 +69,11 @@ prot_res <- psm_res_flt %>% lapply(function(agc_target){
   agc_target %>% lapply(function(thresholded_psms){
   
     # log center-median normalise PSMs before aggregation
-    x <- thresholded_psms %>% log(base=2) %>%
-      MSnbase::normalise(method='diff.median')
-    exprs(x) <- 2^exprs(x) # then exponentiate to get untransformed intensities
+    #x <- thresholded_psms %>% log(base=2) %>%
+    #  MSnbase::normalise(method='diff.median')
+    #exprs(x) <- 2^exprs(x) # then exponentiate to get untransformed intensities
     
-    aggregate_psms(x, level='protein')
+    aggregate_psms(thresholded_psms, level='protein')
   })
 })
 
@@ -87,11 +90,11 @@ pep_res <- psm_res_flt %>% lapply(function(agc_target){
   agc_target %>% lapply(function(thresholded_psms){
   
     # log center-median normalise PSMs before aggregation
-    x <- thresholded_psms %>% log(base=2) %>%
-      MSnbase::normalise(method='diff.median')
-    exprs(x) <- 2^exprs(x) # then exponentiate to get untransformed intensities
+    #x <- thresholded_psms %>% log(base=2) %>%
+    #  MSnbase::normalise(method='diff.median')
+    #exprs(x) <- 2^exprs(x) # then exponentiate to get untransformed intensities
     
-    aggregate_psms(x, level='peptide')
+    aggregate_psms(thresholded_psms, level='peptide')
   })
     
 })
@@ -155,8 +158,9 @@ summarisations <- list('protein'=prot_res, 'peptide'=pep_res)
 
 ```{r}
 # define thresholds to plot fold changes. Each set of threshold will be plotted at peptide and protein level, with both AGC settings
-datasets <- c('0, 100, 0, 0') 
+datasets <- list(c('0.2, 50, 10, 0'), c('0.5, 10, 0, 0') ) 
 ```
+
 
 
 ```{r}
@@ -180,7 +184,8 @@ summarisations %>% names() %>% lapply(function(level){
       to_plot <- merge(x, y,
                        by.x=c(feature_name, 'sample'),
                        by.y=c('id', 'tag')) %>%
-        filter(species!='mixed')
+        filter(species!='mixed') %>%
+        filter(!comparison %in% positive_comparisons)
       
       p <- to_plot  %>%
         ggplot(aes(log2(intensity), diff)) +
@@ -193,7 +198,7 @@ summarisations %>% names() %>% lapply(function(level){
           ylab('Difference in abundnace (log2)') +
           ggtitle(sprintf('%s - %s - %s', agc, thresholds, level))
     
-      suppressWarnings(print(p + geom_point(size=0.2, alpha=0.1, colour='grey30')))
+      suppressWarnings(print(p + geom_point(size=0.2, alpha=0.1, colour='grey30') + geom_smooth(method='loess')))
     
       suppressWarnings(print(p %+% to_plot[to_plot$fraction_below>0,] +
               aes(fraction_below) +
@@ -215,6 +220,74 @@ summarisations %>% names() %>% lapply(function(level){
 ```
 
 
+
+```{r}
+psm_res_flt %>% names() %>% lapply(function(agc){
+  
+  datasets %>% lapply(function(thresholds){
+    
+    for(level in c('peptide', 'protein')){
+  
+      if(level=='peptide'){
+        feature_name <- 'Sequence'
+        min_features <- 1
+      } else{
+        feature_name <- 'Master.Protein.Accessions'
+        min_features <- 2
+      }
+      
+    all <- psm_res_flt[[agc]][[thresholds]] %>% 
+        MSnbase::filterNA(pNA = 0) %>% # remove PSMs with missing values 
+        restrict_features_per_protein(min_features = min_features, # remove features with <2 PSMs
+                                      master_protein_col=feature_name, plot=FALSE) 
+
+    hs <- all[fData(all)$species=='H.sapiens']
+    sc <- all[fData(all)$species=='S.cerevisiae']
+    
+    slices <- list('All'=all, 'H.sapiens'=hs, 'S.cerevisiae'=sc)
+    for(slice in names(slices)){
+      
+      notch_per_protein <- get_notch_per_protein(slices[[slice]], master_prot_col=feature_name) %>%
+         mutate(sample=factor(remove_x(sample), colnames(slices[[slice]])))
+      
+      print(notch_per_protein %>%
+        group_by(sample, fraction_below>=0.25) %>%
+        tally())
+      
+      p <- notch_per_protein %>%
+        ggplot(aes(.data$fraction_below)) +
+        geom_histogram(bins = 20) + 
+        theme_camprot() +
+        xlab("Fraction at/below notch PSMs") +
+        ylab("Proteins") +
+        ggtitle(sprintf('%s\n%s\n%s\n%s', agc, thresholds, slice, level)) +
+        scale_x_continuous(breaks=seq(0,1,0.25))
+      
+      print(p)
+      
+      p <- notch_per_protein %>%
+        filter(fraction_below>0) %>% 
+        ggplot(aes(.data$fraction_below)) +
+        geom_histogram(bins = 10) + 
+        theme_camprot(base_size = 10) +
+        facet_wrap(~sample) + 
+        xlab("Fraction at/below notch PSMs") +
+        ylab("Proteins") +
+        ggtitle(sprintf('%s\n%s\n%s\n%s', agc, thresholds, slice, level)) +
+        scale_x_continuous(breaks=seq(0,1,0.5))
+      
+      print(p)
+    
+      }
+    }
+    
+    return(NULL)
+  })
+  
+  return(NULL)
+  
+})
+```
 
 
 

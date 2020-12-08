@@ -19,14 +19,13 @@ fontsize: 11pt
 library(camprotR)
 library(tidyverse)
 library(limma)
-library(DEqMS)
 library(MSnbase)
 ```
 
 
 ```{r}
 prot_res <- readRDS('../results/prot_res.rds')
-pep_res <- readRDS('../results/prot_res.rds')
+pep_res <- readRDS('../results/pep_res.rds')
 expected <- readRDS('../results/expected.rds')
 psm_res <- readRDS('../results/psm_res.rds')
 ```
@@ -37,72 +36,6 @@ length(prot_res$`AGC: 2E5`)
 length(pep_res$`AGC: 2E5`)
 ```
 
-```{r}
-# code for limma plotting. Move into cell downstream for optional plotting!
-
-notch_count %>%
-      mutate(sample=remove_x(sample)) %>%
-      filter(sample %in% colnames(dat)[extract_cols]) %>%
-      group_by(!!sym(merge_col)) %>%
-      summarise(mean_fraction_below=mean(fraction_below)) %>%
-      merge(limma.results, by.x=merge_col, by.y='row.names')
-
-
-    plot_title <- sprintf('%s - %s', name, contrasts2desc[[contrast]]) 
-    p <- ggplot(limma.results) +
-      ggtitle(plot_title)
-    
-    p1 <- p + aes(x = P.Value) + 
-      geom_histogram(bins = 50, boundary = 0) + 
-      theme_camprot() +
-      facet_wrap(~species, scales='free')
-    
-    print(p1)
-    print(p1 + aes(logFC))
-    
-    p2 <- p +
-      aes(log10(P.Value), colour=contains_notch) +
-      geom_density() +
-      theme_camprot() +
-      facet_wrap(~species)
-    
-    print(p2)
-    
-    p3 <- p +
-      aes(mean_fraction_below, logFC) +
-      geom_point() +
-      theme_camprot() +
-      facet_wrap(~species) +
-      geom_smooth(method='lm')
-    
-    print(p3)
-  
-    p4 <- p + aes(logFC, colour=contains_notch) +
-      geom_density() +
-      facet_wrap(~species, scales='free') +
-      theme_camprot() +
-       xlab('Fold change (Log2)')
-  
-    if(!mock){
-     p4 <- p4 + geom_vline(data=expected[
-       expected$comparison==gsub('x', '', contrasts2desc[[contrast]]),],
-                           aes(xintercept=log2(expected)), linetype=2)
-   } else{
-     p4 <- p4 + geom_vline(xintercept=0 ,linetype=2)
-   }
-    
-    p5 <- limma.results %>%
-      group_by(species, contains_notch, binned_ave_expr) %>%
-      summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01))) %>%
-      ggplot(aes(binned_ave_expr, proportion_sig, colour=contains_notch, group=contains_notch)) +
-      geom_line() +
-      theme_camprot(base_size=12) +
-      facet_wrap(~species) +
-      theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
-      xlab('Average abundance') +
-      ylab('Propotion significant (1% FDR)') +
-      ggtitle(plot_title)
-```
 
 Define a function to run limma, with option to run 'mock' or real differential abundance testing.
 ```{r}
@@ -177,6 +110,10 @@ all_mock_limma_results <- datasets %>% names() %>% lapply(function(l){
   }) %>% do.call(what='rbind')
 ```
 
+```{r}
+all_mock_limma_results %>% filter(adj.P.Val<0.01)
+```
+
 Run limma for all datasets
 ```{r}
 
@@ -197,6 +134,9 @@ all_limma_results <- datasets %>% names() %>% lapply(function(l){
   }) %>% do.call(what='rbind')
 ```
 
+```{r}
+select <- dplyr::select
+```
 
 ```{r}
 thresholds_to_retain <- all_limma_results %>%
@@ -250,38 +190,148 @@ to_plot %>%
   tally() %>% pull(n) %>% table()
 ```
 ```{r}
-contains_notch <- psm_res %>% lapply(function(x){
-  
-  contains_notch_1_2 <- x[,1:7] %>%
-    get_notch_per_protein() %>%
-    group_by(Master.Protein.Accessions) %>%
-    summarise(max_fraction=max(fraction_below)) %>%
-    filter(max_fraction>0) %>%
-    mutate(comparison='2 vs 1')
-  
-  contains_notch_1_6 <- x[,c(1:4, 8:10)] %>%
-    get_notch_per_protein() %>%
-    group_by(Master.Protein.Accessions) %>%
-    summarise(max_fraction=max(fraction_below)) %>%
-    filter(max_fraction>0) %>%
-    mutate(comparison='6 vs 1')
-  
-  return(rbind(contains_notch_1_2, contains_notch_1_6))
-})
-```
-
-```{r}
 agcs <- unique(all_limma_results$agc)
 names(agcs) <- agcs
 
 levels <- unique(all_limma_results$level)
 names(levels) <- levels
 
+```
+
+```{r}
+contains_notch <- psm_res %>% lapply(function(x){
+  levels %>% lapply(function(level){
+  
+    if(level=='protein'){
+      group_id <- 'Master.Protein.Accessions'
+    }
+    else{
+      group_id <- 'Sequence'
+    }
+    
+    contains_notch_1_2 <- x[,1:7] %>%
+      get_notch_per_protein(master_prot_col=group_id) %>%
+      group_by_at(group_id) %>%
+      summarise(max_fraction=max(fraction_below)) %>%
+      filter(max_fraction>0) %>%
+      mutate(comparison='2 vs 1')
+    
+    contains_notch_1_6 <- x[,c(1:4, 8:10)] %>%
+      get_notch_per_protein(master_prot_col=group_id) %>%
+      group_by_at(group_id) %>%
+      summarise(max_fraction=max(fraction_below)) %>%
+      filter(max_fraction>0) %>%
+      mutate(comparison='6 vs 1')
+    
+    return(rbind(contains_notch_1_2, contains_notch_1_6))
+  })
+})
+```
+Plot the precision and recall for the strict filtering +/- notch
+```{r}
+thresholds_to_retain <- all_limma_results %>%
+    select(threshold) %>%
+    unique() %>%
+    separate(threshold, into=c('delta', 'interference', 'sn', 'notch'), sep=', ', remove=FALSE) %>%
+    filter(sn==10, interference==10, delta==0.5) %>%
+    pull(threshold)
+
+to_plot <- all_limma_results %>%
+  filter(level=='protein', agc=='AGC: 5E4', threshold %in% thresholds_to_retain) %>%
+  separate(threshold, into=c('delta', 'interference', 'sn', 'notch'), sep=', ', remove=FALSE) %>%
+  mutate(notch=recode(notch, '1'=TRUE, '0'=FALSE))
+
+keep_features <- to_plot %>%
+  group_by(Row.names) %>%
+  tally() %>%
+  filter(n==4) %>% # 2 filtering threshold sets * 2 contrasts
+  pull(Row.names)
+
+to_plot_common <- to_plot %>%
+  filter(Row.names %in% keep_features) %>%
+  mutate(comparison=gsub('x', '', comparison)) %>%
+  merge(contains_notch$`AGC: 5E4`$protein,
+        by.x=c('comparison', 'Row.names'),
+        by.y=c('comparison', 'Master.Protein.Accessions'), all.x=TRUE) %>%
+  mutate(contains_notch=is.finite(max_fraction),
+         sig=adj.P.Val<0.01,
+         sig_up=(sig & logFC>0),
+         sig_dw=(sig & logFC<0),
+         tp=((sig_up & species=='S.cerevisiae') | (sig_dw & species=='H.sapiens')),
+         fp=((sig_dw & species=='S.cerevisiae') | (sig_up & species=='H.sapiens')),
+         fn=!sig)
+
+summarised_all <- to_plot_common %>%
+  group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
+  summarise(ave_lgfc=mean(logFC, na.rm=TRUE),
+            tp=sum(tp),
+            fp=sum(fp),
+            fn=sum(fn),
+            precision=tp/(tp+fp),
+            recall=tp/(tp+fn)) %>%
+  mutate(f1=2*((precision*recall/(precision+recall))),
+         level='all')
+
+summarised_with_notch <- to_plot_common %>%
+  filter(contains_notch) %>%
+  group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
+  summarise(ave_lgfc=mean(logFC, na.rm=TRUE),
+            tp=sum(tp),
+            fp=sum(fp),
+            fn=sum(fn),
+            precision=tp/(tp+fp),
+            recall=tp/(tp+fn)) %>%
+  mutate(f1=2*((precision*recall/(precision+recall))),
+         level='notch')
+```
+
+```{r}
+summarised <- rbind(summarised_all, summarised_with_notch) %>%
+  ungroup() %>%
+  select(notch, species, comparison, precision, recall, tp, fp, fn, level) %>%
+  pivot_longer(cols=-c(notch, species, comparison, level), names_to='metric', values_to='value') %>%
+  mutate(comp_spec=interaction(species, comparison, sep=': '))
+
+summarised %>%
+  #filter(!metric %in% c('tp', 'fp', 'fn')) %>%
+  filter(!metric %in% c('precision', 'recall', 'fp')) %>%
+  ggplot(aes(metric, value, fill=notch)) +
+  geom_bar(stat='identity', position='dodge') +
+  theme_camprot(base_size=10, border=FALSE) +
+  facet_grid(level~comp_spec, scales='free_y') +
+  scale_fill_manual(values=get_cat_palette(6)[5:6], name='Notch filtering') +
+  #theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  ylab('Value') +
+  xlab('') +
+  geom_text(aes(label=round(value, 3), y=Inf), vjust=3, position = position_dodge(width = 1), size=2) +
+  #scale_y_continuous(breaks=seq(0,3000,1000), limits=c(0,3000)) +
+  theme(aspect.ratio=1) +
+  scale_y_continuous(expand=expansion(mult = c(0, .2)))
+
+summarised %>%
+  filter(species=='H.sapiens', comparison=='2 vs 1', level=='notch', !metric %in% c('precision', 'recall', 'fp')) %>%
+  mutate(metric=recode(metric, 'fn'='False negative', 'tp'='True positive')) %>%
+  ggplot(aes(metric, value, fill=notch)) +
+  geom_bar(stat='identity', position='dodge') +
+  theme_camprot(border=FALSE) +
+  scale_fill_manual(values=get_cat_palette(6)[5:6], name='Notch filtering') +
+  #theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
+  ylab('Value') +
+  xlab('') +
+  geom_text(aes(label=round(value, 4), y=Inf), vjust=0.9, position = position_dodge(width = 1), size=4) +
+  theme(aspect.ratio=1)
+
+?expansion
+```
+
+
+```{r}
+
 limma_filtering_sig_count_tile_plots <- agcs %>%
   lapply(function(a){
     levels %>%
     lapply(function(l) {
-      
+
     thresholds_to_retain <- all_limma_results %>%
       select(threshold) %>%
       unique() %>%
@@ -315,41 +365,54 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
     summarised_common_features <- to_plot %>%
       filter(Row.names %in% keep_features) %>%
       mutate(comparison=gsub('x', '', comparison)) %>%
+      mutate(sig=adj.P.Val<0.01,
+             sig_up=(sig & logFC>0),
+             sig_dw=(sig & logFC<0),
+             tp=((sig_up & species=='S.cerevisiae') | (sig_dw & species=='H.sapiens')),
+             fp=((sig_dw & species=='S.cerevisiae') | (sig_up & species=='H.sapiens')),
+             fn=!sig) %>%
       group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
-      summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01), na.rm=TRUE),
-                ave_lgfc=mean(logFC, na.rm=TRUE))
+      summarise(ave_lgfc=mean(logFC, na.rm=TRUE),
+                tp=sum(tp),
+                fp=sum(fp),
+                fn=sum(fn),
+                precision=tp/(tp+fp),
+                recall=tp/(tp+fn)) %>%
+      mutate(f1=2*((precision*recall/(precision+recall))))
+    
+    if(l=='protein'){
+      group_id <- 'Master.Protein.Accessions'
+    }
+    else{
+      group_id <- 'Sequence'
+    }
     
     summarised_common_features_with_notch <- to_plot %>%
       filter(Row.names %in% keep_features) %>%
       mutate(comparison=gsub('x', '', comparison)) %>%
-      merge(contains_notch[[a]],
+      merge(contains_notch[[a]][[l]],
             by.x=c('comparison', 'Row.names'),
-            by.y=c('comparison', 'Master.Protein.Accessions')) %>%
+            by.y=c('comparison', group_id)) %>%
+      mutate(sig=adj.P.Val<0.01,
+             sig_up=(sig & logFC>0),
+             sig_dw=(sig & logFC<0),
+             tp=((sig_up & species=='S.cerevisiae') | (sig_dw & species=='H.sapiens')),
+             fp=((sig_dw & species=='S.cerevisiae') | (sig_up & species=='H.sapiens')),
+             fn=!sig) %>%
       group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
-      summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01), na.rm=TRUE),
-                ave_lgfc=mean(logFC, na.rm=TRUE))
-    
-    print(to_plot %>%
-      filter(Row.names %in% keep_features) %>%
-      mutate(comparison=gsub('x', '', comparison)) %>%
-      group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
-            tally())
-    
-    
-    print(to_plot %>%
-      filter(Row.names %in% keep_features) %>%
-      mutate(comparison=gsub('x', '', comparison)) %>%
-        merge(contains_notch[[a]],
-            by.x=c('comparison', 'Row.names'),
-            by.y=c('comparison', 'Master.Protein.Accessions')) %>%
-      group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
-            tally())
-      
+      summarise(ave_lgfc=median(logFC, na.rm=TRUE),
+                tp=sum(tp),
+                fp=sum(fp),
+                fn=sum(fn),
+                precision=tp/(tp+fp),
+                recall=tp/(tp+fn)) %>%
+      mutate(f1=2*((precision*recall/(precision+recall))))
+          
     p <- summarised_common_features %>%
       ggplot(aes(y=interaction(interference, delta, sep=', '),
                  x=interaction(sn, notch, sep=', '),
-                 fill=proportion_sig,
-                 label=round(proportion_sig, 2))) +
+                 fill=f1,
+                 label=round(f1, 3))) +
       geom_tile() +
       theme_camprot(base_size=12) +
       facet_grid(comparison~species) +
@@ -357,9 +420,9 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
       scale_fill_gradient2(mid='grey90', high=get_cat_palette(1),
                            low=get_cat_palette(2)[2],
                            midpoint=0.5,
-                           name='Proportion significant\n(FDR<1%)') +
+                           name='F1 score') +
       ylab('Max interference (%), Min delta score') +
-      xlab('Min Signal/Notch + Notch') +
+      xlab('Min Signal/Noise + Notch') +
       geom_text(size=3) +
       theme(panel.spacing = unit(0, "lines")) +
       scale_x_discrete(expand = c(0,0)) +
@@ -368,12 +431,22 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
       ggtitle(sprintf('%s - %s', a, l))
     
     print(p)
-    
-    p2 <- p + aes(fill=2^ave_lgfc, label=round(2^ave_lgfc, 2)) +
+    print(p + aes(fill=precision, label=round(precision, 3)) +
+          scale_fill_gradient2(mid='grey90', high=get_cat_palette(1),
+                   low=get_cat_palette(2)[2],
+                   midpoint=0.5,
+                   name='Precision'))
+    print(p + aes(fill=recall, label=round(recall, 3)) +
+          scale_fill_gradient2(mid='grey90', high=get_cat_palette(1),
+                   low=get_cat_palette(2)[2],
+                   midpoint=0.5,
+                   name='recall'))
+
+    p2 <- p + aes(fill=2^ave_lgfc, label=round(2^ave_lgfc, 3)) +
                     scale_fill_gradient2(mid='grey90', high=get_cat_palette(1),
                            low=get_cat_palette(2)[2],
                            midpoint=0.5,
-                           name='Average fold-change')
+                           name='Median\nfold-change')
     print(p2)
     
     print(p %+% summarised_common_features_with_notch)
@@ -381,8 +454,9 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
     
     p3 <- to_plot %>%
       mutate(comparison=gsub('x', '', comparison)) %>%
+      mutate(sig=adj.P.Val<0.01) %>%
       group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
-      summarise(n_sig=sum(as.numeric(adj.P.Val<0.01), na.rm=TRUE)) %>%
+      summarise(n_sig=sum(as.numeric(sig), na.rm=TRUE)) %>%
       ggplot(aes(y=interaction(interference, delta, sep=', '),
                  x=interaction(sn, notch, sep=', '),
                  fill=n_sig,
@@ -393,9 +467,9 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
       scale_fill_gradient2(mid='grey90', high=get_cat_palette(1),
                            low=get_cat_palette(2)[2],
                            midpoint=0.5,
-                           name='# significant (FDR<1%)') +
-      ylab('Max interference (%), Min delta score') +
-      xlab('Min Signal/Notch + Notch') +
+                           name=sprintf('Significant\n%ss\n(FDR<1%%)', l)) +
+      ylab('Max. interference (%), min. delta score') +
+      xlab('Min Signal/Noise + Notch') +
       geom_text(size=3) +
       theme(panel.spacing = unit(0, "lines")) +
       scale_x_discrete(expand = c(0,0)) +
@@ -404,29 +478,65 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
       ggtitle(sprintf('%s - %s', a, l))
     
     print(p3)
-    
     return(list('to_plot'=to_plot, 'keep_features'=keep_features, 'p'=p, 'p2'=p2, 'p3'=p3))
   })
 })
 ```
 
+Save out desired plots
+```{r}
+plots <- limma_filtering_sig_count_tile_plots$`AGC: 5E4`
+for(level in names(plots)){
+  ggsave(sprintf('../results/plots/%s_f1.png', level),
+         (plots[[level]]$p + ggtitle('')), width=5, height=5)
+  
+  ggsave(sprintf('../results/plots/%s_fold_change.png', level),
+         (plots[[level]]$p2 + ggtitle('')), width=5, height=5)
+  
+  ggsave(sprintf('../results/plots/%s_tally.png', level),
+         (plots[[level]]$p3 + ggtitle('')), width=5, height=5)
+}
+
+```
+
 
 ```{r}
-x <- limma_filtering_sig_count_tile_plots$`AGC: 5E4`$protein
+filtering_to_plot <- list('sn'=0, 'int'=10, delta=0.5)
 
-x$to_plot %>%
-  filter(sn==10, interference==10, delta==0.2) %>%
-  ggplot(aes(logFC, colour=notch)) +
-  geom_density() +
-  theme_camprot() +
-  facet_grid(species~comparison, scales='free')
+for(level in names(limma_filtering_sig_count_tile_plots$`AGC: 5E4`)){
+  
+  to_plot <- limma_filtering_sig_count_tile_plots$`AGC: 5E4`[[level]]$to_plot %>%
+    filter(sn==filtering_to_plot$sn,
+           interference==filtering_to_plot$int,
+           delta==filtering_to_plot$delta)
+  
+  print(dim(to_plot))
+
+  p <- to_plot %>%
+    mutate(comparison=gsub('x', '', comparison)) %>%
+    ggplot(aes(logFC, colour=notch)) +
+    theme_camprot(base_size=12) +
+    facet_wrap(species~comparison, scales='free') +
+    xlab('Fold difference (log2)') +
+    ylab('Density') +
+    scale_colour_manual(values=get_cat_palette(4)[3:4], name='') +
+    geom_vline(data=expected[expected$comparison %in% c('2 vs 1', '6 vs 1'),],
+               aes(xintercept=log2(expected)), linetype=2, lwd=1, colour='grey') +
+    geom_density()
+  
+  print(p)
+  ggsave(sprintf('../results/plots/%s_fold_change_distribution.png', level), p)
+
+}
+
+
 ```
 ```{r}
 psm_res_flt <- readRDS('../results/psm_res_flt.rds')
 ```
 
 ```{r}
-thresholds_of_interest <- c('0.2, 10, 10, 0')
+thresholds_of_interest <- list(c('0.2, 10, 10, 0'), c('0.5, 10, 10, 0'))
 
 contains_notch_filt <- psm_res_flt %>% lapply(function(agc){
   contains_notch <- vector('list', length(thresholds_of_interest))
@@ -474,32 +584,75 @@ limma_filtering_sig_count_tile_plots$`AGC: 5E4`$protein$to_plot %>%
 ```
 
 
-
-
-
-
-code for DEqMS if required...
 ```{r}
-feature_count <- prot_robust$`filtered, inc S/N`$`AGC: 5E4`$feature_counts %>%
-  filter(sample %in% colnames(dat))
-
-# Get the minimum peptide count per protein
-min.pep.count <- feature_count %>% 
-  group_by(Master.Protein.Accessions) %>% 
-  summarise(Min.pep.count = min(n)) %>% 
-  tibble::column_to_rownames("Master.Protein.Accessions")
+limma_filtering_sig_count_tile_plots$`AGC: 5E4`$protein$to_plot %>%
+  merge(contains_notch$`AGC: 5E4`$protein[,c('Master.Protein.Accessions', 'max_fraction')],
+        by.x='Row.names', by.y='Master.Protein.Accessions') %>%
+  filter(interference==10, sn==10, delta==0.5) %>%
+  mutate(comparison=gsub('x', '', comparison)) %>%
+  ggplot(aes(logFC, colour=notch)) +
+  geom_density() +
+  theme_camprot() +
+  facet_grid(comparison~species, scales='free') +
+  geom_vline(data=expected[expected$comparison %in% c('2 vs 1', '6 vs 1'),],
+             aes(xintercept=log2(expected)))#, linetype==2, colour='grey')
   
-# Add the min peptide count
-fit$count = min.pep.count[rownames(fit$coefficients), "Min.pep.count"]
-
-# Run DEqMS
-fit.deqms = spectraCounteBayes(fit)
-
-# Run the DEqMS giagnostic plots
-VarianceBoxplot(fit.deqms, n = 30, xlab = "PSM count")
-VarianceScatterplot(fit.deqms)
-
-# Extract the DEqMS results
-DEqMS.results <- outputResult(fit.deqms, coef_col = 2)
-
 ```
+```{r, fig.width=7, fig.height=7}
+expected_data <- expected %>%
+  filter(comparison %in% c('2 vs 1', '6 vs 1'), species=='S.cerevisiae') %>%
+  mutate(`Without notch filt.`=log2(expected), `With notch filt`=log2(expected))
+
+plus_minus_notch <- limma_filtering_sig_count_tile_plots$`AGC: 5E4`$protein$to_plot %>%
+  filter(interference==10, sn==10, delta==0.5) %>%
+  select(Row.names, logFC, species, comparison, level, agc, notch) %>%
+  pivot_wider(names_from=notch, values_from=logFC) %>%
+  mutate(comparison=gsub('x', '', comparison)) %>%
+  merge(contains_notch_filt$`AGC: 5E4`$`0.5, 10, 10, 0`,
+        by.x=c('Row.names', 'comparison'), by.y=c('Master.Protein.Accessions', 'comparison'))
+
+plus_minus_notch %>%
+  filter(species=='S.cerevisiae') %>%
+  ggplot(aes(`Without notch filt.`, `With notch filt`)) +
+  geom_abline(slope=1, linetype=2) +
+  geom_point() +
+  theme_camprot(base_size=10) +
+  facet_wrap(~comparison, scales='free') +
+  xlab('Without notch filtering') +
+  ylab('With notch filtering') +
+  geom_point(data=expected_data, colour=get_cat_palette(5)[5], size=3)
+```
+
+```{r}
+library(ggbeeswarm)
+
+change_relative_to_gt <- plus_minus_notch  %>%
+  filter(is.finite(`With notch filt`)) %>%
+  merge(expected[expected$comparison %in% c('2 vs 1', '6 vs 1'),], by=c('species', 'comparison')) %>%
+  mutate(expected=log2(expected)) %>%
+  mutate(without_diff=abs(`Without notch filt.`-expected),
+         with_diff=abs(`With notch filt`-expected),
+         improvement=without_diff-with_diff) %>% arrange(improvement)
+
+table(change_relative_to_gt$species)
+dim(change_relative_to_gt)
+
+p <- change_relative_to_gt %>% 
+  filter(species=='S.cerevisiae') %>%
+  ggplot(aes(comparison, improvement)) +
+  theme_camprot(base_size=15) +
+  xlab('Comparison') +
+  ylab('Change in fold-change with notch-filtering,\nrelative to ground-truth') +
+  theme(aspect.ratio=2) +
+  ylim(-0.2,0.2) +
+  geom_quasirandom()
+
+print(p)
+ggsave('../results/plots/fold_change_plus_minus_notch_filt.png')
+```
+
+
+
+
+
+

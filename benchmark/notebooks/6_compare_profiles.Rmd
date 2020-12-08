@@ -1,0 +1,98 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(camprotR)
+library(tidyverse)
+library(MSnbase)
+```
+
+
+```{r}
+psm_res <- readRDS('../results/psm_res.rds')
+psm_res_flt <- readRDS('../results/psm_res_flt.rds')
+psm_res_flt_sn <- readRDS('../results/psm_res_flt_sn.rds')
+
+prot_sum <- readRDS('../results/prot_sum.rds')
+prot_robust <- readRDS('../results/prot_robust.rds')
+notch_per_protein <- readRDS('../results/notch_per_protein.rds')
+
+```
+
+
+```{r}
+x <- prot_robust$`filtered, inc S/N`$`AGC: 5E4`$protein %>% normalise(method='sum')
+
+x %>% exprs() %>%
+  data.frame() %>%
+  tibble::rownames_to_column('Master.Protein.Accessions') %>%
+  pivot_longer(-Master.Protein.Accessions, names_to='sample', values_to='abundance') %>%
+  merge(fData(x)[,'species',drop=FALSE], by.x='Master.Protein.Accessions', by.y='row.names') %>%
+  filter(species!='mixed') %>%
+  merge(notch_per_protein$filtered$`AGC: 5E4`, by=c('Master.Protein.Accessions', 'sample')) %>%
+  mutate(sample=factor(remove_x(sample), levels=colnames(x))) %>%
+  mutate(contains_notch=fraction_below>0) %>%
+  ggplot(aes(sample, abundance, colour=contains_notch, group=Master.Protein.Accessions)) +
+  geom_line(size=0.5, alpha=0.25) +
+  theme_camprot() +
+  facet_wrap(~species)
+
+```
+
+```{r}
+x %>% exprs() %>%
+  data.frame() %>%
+  tibble::rownames_to_column('Master.Protein.Accessions') %>%
+  pivot_longer(-Master.Protein.Accessions, names_to='sample', values_to='abundance') %>%
+  merge(fData(x)[,'species',drop=FALSE], by.x='Master.Protein.Accessions', by.y='row.names') %>%
+  filter(species!='mixed') %>%
+  merge(notch_per_protein$filtered$`AGC: 5E4`, by=c('Master.Protein.Accessions', 'sample')) %>%
+  mutate(sample=factor(remove_x(sample), levels=colnames(x))) %>%
+  merge(pData(x), by.x='sample', by.y='row.names') %>%
+  mutate(contains_notch=fraction_below>0) %>%
+  group_by(contains_notch, condition, replicate, species) %>%
+  summarise(abundance=mean(abundance)) %>%
+  ggplot(aes(contains_notch, abundance, fill=contains_notch)) +
+  #geom_bar(stat='identity', position='dodge') +
+  stat_summary(fun.y = mean, geom = "bar") + 
+  stat_summary(fun.data = mean_se, geom = "errorbar") +
+  #stat_summary(position=position_dodge()) +
+  theme_camprot(base_size=12) +
+  facet_wrap(condition~species, scales='free')
+  
+```
+```{r}
+x <- psm_res_flt_sn$`AGC: 5E4` %>% normalise(method='sum')
+
+fData(x)$inc_subnotch <- apply(exprs(psm_res_flt_sn$`AGC: 5E4`), MARGIN=1, function(x) min(x, na.rm=TRUE))<5.5
+print(table(fData(x)$inc_subnotch))
+
+to_plot <- x %>%
+  exprs() %>%
+  data.frame() %>%
+  tibble::rownames_to_column('id') %>%
+  pivot_longer(-id, names_to='sample', values_to='abundance') %>%
+  merge(fData(x)[,c('species', 'inc_subnotch')], by.x='id', by.y='row.names') %>%
+  filter(species!='mixed') %>%
+  #merge(notch_per_protein$filtered$`AGC: 5E4`, by=c('Master.Protein.Accessions', 'sample')) %>%
+  mutate(sample=factor(remove_x(sample), levels=colnames(x)))
+  #mutate(contains_notch=fraction_below>0) %>%
+
+to_plot %>%
+  ggplot(aes(sample, abundance, group=id, colour=inc_subnotch)) +
+  geom_line(size=0.1, alpha=0.25) +
+  theme_camprot() +
+  facet_wrap(~species)
+
+to_plot %>%
+  group_by(sample, inc_subnotch, species) %>%
+  summarise(abundance=mean(abundance, na.rm=TRUE)) %>%
+  ggplot(aes(sample, abundance, colour=inc_subnotch, group=inc_subnotch)) +
+  geom_line() +
+  theme_camprot() +
+  facet_wrap(~species)
+
+```
+

@@ -72,6 +72,8 @@ psm_parsed <- psm %>% lapply(function(x){
                  crap_proteins=crap.accessions, unique_master=FALSE)
 })
 ```
+
+
 Annotated the data with the species
 ```{r}
 psm_parsed_annt <- psm_parsed %>% lapply(function(x){
@@ -119,6 +121,11 @@ psm_parsed_annt %>% names() %>% lapply(function(x){
   
   print(p1)
   print(p2)
+  
+  print(psm_parsed_annt[[x]] %>%
+    select(Master.Protein.Accessions, species) %>%
+    unique() %>%
+    group_by(species) %>% tally())
   
   ggsave(sprintf('../results/plots/%s_psm_n.png', gsub('AGC: ', '', x)), p1)
   ggsave(sprintf('../results/plots/%s_proteins_n.png', gsub('AGC: ', '', x)), p2)

@@ -27,7 +27,7 @@ library(MSnbase)
 
 
 notch_lower <- 4.25
-notch_upper <- 6
+notch_upper <- 5.75
 ```
 
 ```{r}
@@ -129,9 +129,11 @@ pred_obs <- psm_res %>% lapply(function(x){
 
 ```{r}
 plot_correlation <- function(obj, colours=get_cat_palette(7), include_tls=FALSE){
+  obj <- obj %>%
+    filter(is.finite(obs), is.finite(pred))
+  
   if(include_tls){
     pca <- data.frame(x=log2(obj$pred), y=log2(obj$obs)) %>%
-      filter(is.finite(x), is.finite(y)) %>%
       prcomp()#formula=~x+y)
     slp <- with(pca, rotation[2,1] / rotation[1,1])
     int <- with(pca, center[2] - slp*center[1])
@@ -140,18 +142,21 @@ plot_correlation <- function(obj, colours=get_cat_palette(7), include_tls=FALSE)
   axis_min <- min(log2(c(obj$pred, obj$obs)), na.rm=TRUE)
   axis_max <- max(log2(c(obj$pred, obj$obs)), na.rm=TRUE)
   
+  p_cor <- cor(x=obj$pred, y=obj$obs, method='pearson') %>% round(digits=3)
+  
   pred_vs_obs_tag_int <- obj %>%
-    filter(is.finite(obs)) %>%
     ggplot(aes(log2(pred), log2(obs))) +
     geom_point(size=0.05, alpha=0.1, colour='grey30') +
     geom_hline(yintercept=log2(notch_lower), size=0.5, colour=colours[2], linetype=2) +
     geom_hline(yintercept=log2(notch_upper), size=0.5, colour=colours[1], linetype=2) +
     geom_abline(slope=1, size=0.5, colour=colours[3]) +
-    theme_camprot() +
-    ylab('Predicted intensity') +
-    xlab('Observed intensity') +
+    theme_camprot(border=FALSE) +
+    xlab('Predicted intensity') +
+    ylab('Observed intensity') +
     scale_y_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max)) +
-    scale_x_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max))
+    scale_x_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max)) +
+    annotate(geom='text', x=10, y=max(log2(obj$obs)),
+             label=paste0('r = ', p_cor), size=5)
 
   if(include_tls){
     pred_vs_obs_tag_int <- pred_vs_obs_tag_int +
@@ -172,9 +177,17 @@ plot_correlation <- function(obj, colours=get_cat_palette(7), include_tls=FALSE)
 ```{r}
 
 pred_obs %>% names() %>% lapply(function(x){
+  
   plots <- plot_correlation(pred_obs[[x]])
-  print(plots$pred_vs_obs_tag_int + ggtitle(x))
-  print(plots$pred_vs_obs_tag_int_per_sample + ggtitle(x))
+  
+  p1 <- plots$pred_vs_obs_tag_int
+  p2 <- plots$pred_vs_obs_tag_int_per_sample 
+  
+  ggsave(sprintf('../results/plots/%s_pred_obs.png', x), p1, width=4, height=4)
+  ggsave(sprintf('../results/plots/%s_pred_obs_per_tag.png', x), p2, width=6, height=6)
+  
+  print(p1 + ggtitle(x))
+  print(p2 + ggtitle(x))
 })
 ```
 
@@ -203,9 +216,9 @@ plot_pred_bias <- function(obj, colours=get_cat_palette(7)){
       geom_vline(xintercept=log2(notch_lower), size=0.5, colour=colours[2], linetype=2) +
       geom_vline(xintercept=log2(notch_upper), size=0.5, colour=colours[1], linetype=2) +
       geom_point() +
-      theme_camprot() +
+      theme_camprot(border=FALSE) +
       xlab('Predicted intensity (log2)') +
-      ylab('Fraction Observed<Predicted') +
+      ylab('Fraction\nObserved<Predicted') +
       scale_y_continuous(limits=c(0,1), breaks=seq(0,1,.25))
     
     p_pred_bias_per_sample <- p_pred_bias %+%
@@ -220,8 +233,15 @@ plot_pred_bias <- function(obj, colours=get_cat_palette(7)){
 ```{r}
 pred_bias <- pred_obs %>% names() %>% lapply(function(x){
   plots <- plot_pred_bias(pred_obs[[x]])
-  print(plots$p_pred_bias + ggtitle(x))
-  print(plots$p_pred_bias_per_sample + ggtitle(x))
+  p1 <- plots$p_pred_bias
+  p2 <- plots$p_pred_bias_per_sample
+  
+  ggsave(sprintf('../results/plots/%s_pred_under.png', x), p1, width=4, height=4)
+  ggsave(sprintf('../results/plots/%s_pred_under_per_tag.png', x), p2, width=6, height=6)
+  
+  print(p1 + ggtitle(x))
+  print(p2 + ggtitle(x))
+  
   return(plots$pred_vs_bias)
 })
 
@@ -237,14 +257,15 @@ for(name in names(pred_bias)){
     summarise(fraction_missing=mean(as.numeric(!present))) %>%
     ggplot(aes(binned_prediction, 100*fraction_missing)) +
     geom_point() +
-    theme_camprot() +
+    theme_camprot(border=FALSE) +
     geom_vline(xintercept=log2(notch_lower), size=0.5, colour=colours[2], linetype=2) +
     geom_vline(xintercept=log2(notch_upper), size=0.5, colour=colours[1], linetype=2) +
-    ggtitle(name) +
     xlab('Predicted intensity (log2)') +
     ylab('Missing values (%)')
   
-  print(p)
+  ggsave(sprintf('../results/plots/%s_pred_missing.png', name), p, width=4, height=4)
+  
+  print(p + ggtitle(name))
 }
 ```
 

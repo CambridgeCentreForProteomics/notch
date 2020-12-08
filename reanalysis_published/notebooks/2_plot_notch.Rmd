@@ -29,11 +29,22 @@ psm_res <- readRDS('../results/psm_res.rds')
 ```
 
 ```{r}
+notch_lower <- 4.25
+notch_upper <- 5.75
+```
+
+```{r}
 psm_res %>% names() %>% lapply(function(x){
-  p1 <- plot_TMT_notch(psm_res[[x]]) + ggtitle(x)
-  p2 <- plot_TMT_notch(psm_res[[x]], facet_by_sample=TRUE) + ggtitle(x)
-  print(p1)
-  print(p2)
+  p1 <- plot_TMT_notch(psm_res[[x]], notch_lower=notch_lower, notch_upper=notch_upper) +
+    xlab('Reporter ion\nintensity (log2)')
+  p2 <- plot_TMT_notch(psm_res[[x]], notch_lower=notch_lower, notch_upper=notch_upper, facet_by_sample=TRUE) +
+    xlab('Reporter ion\nintensity (log2)')
+  
+  ggsave(sprintf('../results/plots/%s_tmt_notch.png', x), p1, width=4, height=4)
+  ggsave(sprintf('../results/plots/%s_tmt_notch_per_tag.png', x), p2, width=6, height=6)
+  
+  print(p1 + ggtitle(x))
+  print(p2 + ggtitle(x))
   return(NULL)
 })
 ```
