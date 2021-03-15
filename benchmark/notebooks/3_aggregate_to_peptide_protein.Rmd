@@ -67,11 +67,6 @@ Aggregate to protein-level abundance
 
 prot_res <- psm_res_flt %>% lapply(function(agc_target){
   agc_target %>% lapply(function(thresholded_psms){
-  
-    # log center-median normalise PSMs before aggregation
-    #x <- thresholded_psms %>% log(base=2) %>%
-    #  MSnbase::normalise(method='diff.median')
-    #exprs(x) <- 2^exprs(x) # then exponentiate to get untransformed intensities
     
     aggregate_psms(thresholded_psms, level='protein')
   })
@@ -88,11 +83,7 @@ Aggregate to peptide-level abundance
 pep_res <- psm_res_flt %>% lapply(function(agc_target){
   
   agc_target %>% lapply(function(thresholded_psms){
-  
-    # log center-median normalise PSMs before aggregation
-    #x <- thresholded_psms %>% log(base=2) %>%
-    #  MSnbase::normalise(method='diff.median')
-    #exprs(x) <- 2^exprs(x) # then exponentiate to get untransformed intensities
+
     
     aggregate_psms(thresholded_psms, level='peptide')
   })
@@ -158,7 +149,7 @@ summarisations <- list('protein'=prot_res, 'peptide'=pep_res)
 
 ```{r}
 # define thresholds to plot fold changes. Each set of threshold will be plotted at peptide and protein level, with both AGC settings
-datasets <- list(c('0.2, 50, 10, 0'), c('0.5, 10, 0, 0') ) 
+datasets <- list(c('0.2, 50, 10, 0'), c('0.5, 10, 0, 0'), c('0.5, 10, 16, 0')) 
 ```
 
 

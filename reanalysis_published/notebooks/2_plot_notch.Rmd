@@ -48,6 +48,76 @@ psm_res %>% names() %>% lapply(function(x){
   return(NULL)
 })
 ```
+```{r}
+replicates <- psm_res[c('LOPIT_DC_U2OS_Rep1', 'LOPIT_DC_U2OS_Rep2', 'LOPIT_DC_U2OS_Rep3')]
+
+thresholds <- c(0,5,10,15,20,30,40,50,60,75,100)
+
+notch_per_filter <- sapply(replicates, function(replicate){
+  
+  replicate <- update_average_sn(replicate)
+  replicate <- replicate[rowSums(is.na(exprs(replicate)))!=ncol(replicate),]
+
+  sapply(thresholds, function(thresh){
+    flt <- replicate[fData(replicate)$Average.Reporter.S.N>thresh,]
+    get_below_notch(flt)
+  })
+})
+
+notch_per_filter <- notch_per_filter %>% data.frame() %>% mutate(threshold=thresholds) %>%
+  pivot_longer(cols=-threshold, values_to='sub_notch', names_to='Replicate') %>%
+  separate(Replicate, into=c(NA, NA, NA, 'Replicate'), sep='_')
+
+print(notch_per_filter)
+
+p <- notch_per_filter %>%
+  ggplot(aes(threshold, 100*sub_notch, group=Replicate, colour=Replicate)) +
+  geom_point() +
+  geom_line() +
+  scale_colour_manual(values=get_cat_palette(6)[4:6], labels=1:3) +
+  theme_camprot() +
+  scale_y_continuous(limits=c(0, 5), breaks=seq(0,5,1)) +
+  xlab('Minimum average signal/noise') +
+  ylab('Sub-notch (%)')
+
+print(p)
+ggsave('../results/plots/PSM_SN_flt_frac_notch.png')
+```
+
+```{r}
+
+n_features <- sapply(replicates, function(replicate){
+  
+  replicate <- update_average_sn(replicate)
+  replicate <- replicate[rowSums(is.na(exprs(replicate)))!=ncol(replicate),]
+
+  sapply(thresholds, function(thresh){
+    flt <- replicate[fData(replicate)$Average.Reporter.S.N>thresh,]
+    nrow(flt)
+  })
+})
+
+n_features <- n_features %>% data.frame() %>% mutate(threshold=thresholds) %>%
+  pivot_longer(cols=-threshold, values_to='n_features', names_to='Replicate') %>%
+  separate(Replicate, into=c(NA, NA, NA, 'Replicate'), sep='_')
+
+print(n_features)
+
+p <- n_features %>%
+  ggplot(aes(threshold, n_features, group=Replicate, colour=Replicate)) +
+  geom_point() +
+  geom_line() +
+  scale_colour_manual(values=get_cat_palette(6)[4:6], labels=1:3) +
+  theme_camprot() +
+  scale_y_continuous(limits=c(0, 100000), breaks=seq(0,100000,25000)) +
+  xlab('Minimum average signal/noise') +
+  ylab('PSMs')
+
+print(p)
+ggsave('../results/plots/PSM_SN_flt_n_features.png')
+```
+
+
 
 
   

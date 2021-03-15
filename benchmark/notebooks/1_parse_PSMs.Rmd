@@ -47,7 +47,7 @@ get_fasta_ids <- function(fasta){
   accessions
 }
 
-crap.accessions <- get_fasta_ids('../shared_files/cRAP_FullIdentifiers.fasta')
+crap.accessions <- get_fasta_ids('../../reanalysis_published/shared_files/cRAP_FullIdentifiers.fasta')
 
 
 ```
@@ -55,9 +55,9 @@ crap.accessions <- get_fasta_ids('../shared_files/cRAP_FullIdentifiers.fasta')
 Match species to uniprotID
 ```{r}
 hs.accessions <- get_fasta_ids(
-  '../shared_files/CCP_SwissProt_homo_sapiens_proteome_without_isoforms_20180409.fasta')
+  '../shared_files/CCP_SwissProt_homo_sapiens_proteome_without_isoforms_20180409.fasta.gz')
 sc.accessions <- get_fasta_ids(
-  '../shared_files/swissprot_yeast_database_june2020.fasta')
+  '../shared_files/swissprot_yeast_database_june2020.fasta.gz')
 
 uniprot_2_species <- data.frame('id'=c(hs.accessions, sc.accessions),
                                 'species'=c(rep('H.sapiens', length(hs.accessions)),

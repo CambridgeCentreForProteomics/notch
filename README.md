@@ -9,12 +9,14 @@ A study of the 'notch' in orbitrap TMT reporter ion intensities.
 - MSnbase (Bioconductor)
 - limma (Bioconductor)
 - biobroom (Bioconductor)
+- rawDiag (https://github.com/fgcz/rawDiag)
 - camprotR (https://github.com/CambridgeCentreForProteomics/camprotR)
 
 ## Study components
 1.  [Re-analysis of published datasets](reanalysis_published) to examine:
-    - What happens to notch values? Are they missing, up/down-shifted?
-    - What are the sub-notch values?
+    - What proportion of PRIDE Orbitrap submissions used Tune < 3.0?
+    - Can sub-notch values be removed by average S/N filtering?
+    - What happens to notch values? 
 2. [Analysis of a benchmark human:yeast dataset](benchmark) to examine the impact of the notch/sub-notch region on :
     - PSM/peptide/Protein-level fold-change estimates
     - Detection of differentially abundant peptides/proteins

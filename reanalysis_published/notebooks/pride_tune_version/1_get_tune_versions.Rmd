@@ -1,0 +1,402 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+
+```{r}
+library(curl)
+library(rawDiag)
+library(tidyverse)
+library(camprotR)
+options(timeout=100000) # allow long downloads
+```
+
+
+```{r}
+
+# from https://stackoverflow.com/questions/52911812/check-if-url-exists-in-r
+valid_url <- function(url_in, t=10){
+  con <- url(url_in)
+  check <- suppressWarnings(try(open.connection(con,open="rt",timeout=t),silent=T)[1])
+  suppressWarnings(try(close.connection(con),silent=T))
+  
+  if(!is.null(check)){
+      message('Failed with ftp:// prefix, dropping...')
+      url_in <- gsub('ftp://', '', url_in)
+      #con <- url(url_in)
+      #check <- suppressWarnings(try(open.connection(con,open="rt",timeout=t),silent=T)[1])
+      #suppressWarnings(try(close.connection(con),silent=T))
+  }
+  
+  return(url_in)
+  #ifelse(is.null(check),url_in,NULL)
+}
+
+get_raw_filepath <- function(pride_accession, year, month){
+  # This appears to be standard address for all pride data
+  # e.g "ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2019/01/PXD011254"
+  url_base = "ftp.pride.ebi.ac.uk/pride/data/archive"
+  url <- file.path(url_base, year, month, pride_accession)
+
+  #url <- valid_url(url)
+  #if(is.null(url)){
+  #  return(NULL)
+  #}
+  
+    
+  # parse the files for the accession
+  h <- new_handle()
+  con <- tryCatch(curl(paste0(url, '/'), "r", h),
+      error=function(cond) {
+          message(paste("Cannot access directory - Error:", url))
+          message("Here's the original error message:")
+          message(cond)
+          # Choose a return value in case of error
+          return(NULL)
+      },
+      warning=function(cond) {
+          message(paste("Cannot access directory - Warning:", url))
+          message("Here's the original warning message:")
+          message(cond)
+          # Choose a return value in case of warning
+          return(NULL)
+      }
+  )
+    
+  if(is.null(con)){
+    return(NULL)
+  }
+  
+  tbl = read.table(con, stringsAsFactors=TRUE, fill=TRUE, row.names=NULL)
+  close(con)
+
+  # identify the smallest .raw file
+  top_file <- tbl[grepl('.raw$', tbl[,9]),]
+  
+  if(nrow(top_file)==0){
+    return(NA)
+    }
+  
+  top_file <- top_file[order(top_file[,5]),]
+  top_file <- top_file[1,9]
+  
+
+  
+  return(file.path(url, top_file)) 
+}
+
+
+
+#con <- url('ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/06/PXD002092')
+#check <- suppressWarnings(try(open.connection(con,open="rt",timeout=t),silent=T)[1])
+
+#url <- valid_url('ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2016/08/PXD004222')
+#get_raw_filepath('PXD004222', '2016', '08')
+
+get_metainfo <- function(url){
+  # Download the file
+  tmp_file <- '.temp.raw'
+
+  # Download the file
+  x <- tryCatch(download.file(url, tmp_file),
+        error=function(cond) {
+            message(paste("Cannot download file - Error:", url))
+            # Choose a return value in case of error
+            return(NA)
+        },
+        warning=function(cond) {
+            message(paste("Cannot download file - Warning:", url))
+            # Choose a return value in case of warning
+            return(NA)
+        }
+    )
+  
+  # Read the metadata
+  info <- tryCatch(read.raw.info(tmp_file),
+        error=function(cond) {
+            message(paste("Cannot read file - Error:", url))
+            message("Here's the original error message:")
+            message(cond)
+            # Choose a return value in case of error
+            return(NULL)
+        },
+        warning=function(cond) {
+            message(paste("Cannot read file - Warning:", url))
+            message("Here's the original warning message:")
+            message(cond)
+            # Choose a return value in case of warning
+            return(NULL)
+        }
+    )
+  
+  file.remove(tmp_file)
+  
+  return(info)
+}
+```
+
+
+
+
+
+Read in the table of orbitrap fusion pride accessions and extract metainfo 
+```{r}
+submission_details <- read.delim('../../shared_files/pride_orbitrap.csv', sep='\t')
+print(dim(submission_details))
+
+submission_details <- submission_details %>%
+  filter(!grepl(';', Instrument), grepl('Orbitrap', Instrument), Repos=='PRIDE') %>%
+  separate(Announce.Date, into=c('year', 'month', 'day'), sep='-', remove = FALSE)
+
+dim(submission_details)
+
+submission_details <- submission_details %>%
+  filter(Instrument %in% c('Orbitrap Fusion Lumos', 'Orbitrap Fusion', 'Orbitrap Eclipse'))
+
+dim(submission_details)
+table(submission_details$Instrument)
+table(submission_details$year)
+
+cache_filepath <- './info_details_cache'
+cache_filepath_invalid_accessions <- './invalid_pride_cache'
+#file.remove(cache_filepath_invalid_accessions)
+```
+
+```{r}
+if(file.exists(cache_filepath)){
+  cache <- readRDS(cache_filepath)
+  cached_info_details <-  bind_rows(cache)
+  cached_pride <- cached_info_details$PRIDE
+} else{
+  cache <- NULL
+  cached_pride <- NULL
+}
+
+if(file.exists(cache_filepath_invalid_accessions)){
+  invalid_pride <- readRDS(cache_filepath_invalid_accessions)
+  # For 'No .raw file access', may be temporary connection issue. 
+  invalid_pride <- invalid_pride[!grepl('No .raw file access', invalid_pride)]
+} else{
+  invalid_pride <- NULL
+}
+
+update_invalid <- function(invalid_pride, pride_accession, cache_filepath_invalid_accessions, err_msg){
+  message(err_msg)
+  
+  invalid_pride <- c(invalid_pride, err_msg)
+  names(invalid_pride)[length(invalid_pride)] <- pride_accession
+  saveRDS(invalid_pride, cache_filepath_invalid_accessions)
+  return(invalid_pride)
+}
+  
+verbose <- TRUE
+set.seed(0)
+#random_n <- 500
+#random_rows <- sample(1:nrow(submission_details), size=random_n)
+random_rows <- 1:nrow(submission_details)
+
+info_details <- vector('list', length=length(random_rows))
+n <- 1
+for(row_ix in random_rows){
+  row <- submission_details[row_ix,]
+  
+  pride_accession <- row$Dataset.Identifier
+  if(pride_accession %in% cached_pride){
+    message(sprintf('skipping %s which has already been processed', pride_accession))
+    next()
+  }
+  
+  if(pride_accession %in% names(invalid_pride)){
+    message(sprintf('skipping %s which cannot be processed', pride_accession))
+    next()
+  }
+  
+  year <- row$year
+  month <- row$month
+  url <- get_raw_filepath(pride_accession, year, month)
+  
+  if(is.null(url)){
+    err_msg <- sprintf('No .raw file access for pride accession: %s', pride_accession)
+    invalid_pride <- update_invalid(invalid_pride, pride_accession, cache_filepath_invalid_accessions, err_msg)
+    next()
+  }
+    
+  if(is.na(url)){
+    err_msg <- sprintf('No .raw files for pride accession: %s', pride_accession)
+    invalid_pride <- update_invalid(invalid_pride, pride_accession, cache_filepath_invalid_accessions, err_msg)
+    next()
+  }
+  
+  #url_updated <- valid_url(url)
+  #if(is.null(url_updated)){
+  #  err_msg <- sprintf('URL for pride accession %s is not valid: %s', pride_accession, url)
+  #  invalid_pride <- update_invalid(invalid_pride, pride_accession, cache_filepath_invalid_accessions, err_msg)
+  #  next()
+  #}
+  
+  info <- get_metainfo(url)
+  
+  if(is.null(info)){
+    err_msg <- sprintf('Cannot parse .raw file for PRIDE accession: %s  %s', pride_accession, url)
+    invalid_pride <- update_invalid(invalid_pride, pride_accession, cache_filepath_invalid_accessions, err_msg)
+    next()
+  }
+  
+  if(is.na(info)){
+    err_msg <- sprintf('Cannot downoad .raw file for PRIDE accession: %s %s', pride_accession, url)
+    invalid_pride <- update_invalid(invalid_pride, pride_accession, cache_filepath_invalid_accessions, err_msg)
+    next()
+  }
+  get_metainfo
+  
+  info$PRIDE <- pride_accession
+  
+  # some of the entries are ranges, this just turns the ranges into characters
+  for(column in c('Scan range', 'Time range', 'Mass range')){
+    info[[column]] <- paste0(info[[column]], collapse='-')
+  }
+  
+  info_details[[n]] <- info
+  
+  saveRDS(c(cache, info_details[lengths(info_details) != 0]), cache_filepath) # in case of interruptions
+  
+  n <- n + 1
+}
+
+    
+```
+
+
+
+```{r}
+readRDS(cache_filepath) %>% bind_rows() %>%
+  filter(!grepl('Exactive', 	`Instrument name`)) %>%
+  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  filter(major==1)
+
+readRDS(cache_filepath) %>% bind_rows() %>%
+  filter(!grepl('Exactive', 	`Instrument name`)) %>%
+  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  arrange(major) %>%
+  write.table('./meta_information.tsv', sep='\t', row.names=FALSE, quote=FALSE)
+```
+
+
+```{r}
+readRDS(cache_filepath) %>% bind_rows() %>%
+  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
+  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  group_by(major) %>%
+  tally()
+
+p <- readRDS(cache_filepath) %>% bind_rows() %>%
+  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
+  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  group_by(major, `Instrument model`) %>%
+  tally() %>%
+  ggplot(aes(`Instrument model`, n, fill=major)) +
+  theme_camprot(base_size=15, border=FALSE, aspect_square=FALSE) +
+  scale_fill_manual(values=get_cat_palette(3), name='Major version') +
+  xlab('Instrument model') +
+  ylab('Fraction PRIDE submissions') +
+  theme(axis.text.x=element_text(angle=90, vjust=1, hjust=1))
+
+print(p + geom_bar(position='fill', stat='identity') + geom_text(aes(label=n), position=position_fill(vjust=0.5)))
+print(p + geom_bar(position='stack', stat='identity') + geom_text(aes(label=n), position=position_stack(vjust=0.5)))  
+```
+```{r}
+476/sum(476, 509, 127)
+```
+
+
+```{r}
+readRDS(cache_filepath) %>% bind_rows() %>%
+  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
+  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  filter(year==2014)
+```
+
+```{r}
+library(camprotR)
+#info_details
+
+
+p <- readRDS(cache_filepath) %>% bind_rows() %>%
+  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
+  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  group_by(year=ifelse(year<2017, '<2017', year), major) %>%
+  tally() %>%
+  mutate(major=factor(major, levels=1:3)) %>%
+  ggplot(aes(year, n, fill=major)) +
+  theme_camprot(border=FALSE, aspect_square=FALSE) +
+  scale_fill_manual(values=c('grey90', 'grey70', 'grey50'), name='Tune Version') +
+  scale_x_discrete(name='PRIDE submission year') +
+  coord_cartesian(expand=c(0,0), , clip = "off") +
+  ylab('Fraction of PRIDE submissions')
+
+p1 <- p + geom_bar(position='fill', stat='identity', colour='grey20') + geom_text(aes(label=n), position=position_fill(vjust=0.5), size=7)
+print(p1)
+
+ggsave(plot = p1, './results/version.png')
+print(p + geom_bar(position='stack', stat='identity') + geom_text(aes(label=n), position=position_stack(vjust=0.5)))
+```
+```{r}
+30/102
+```
+
+```{r}
+p <- readRDS(cache_filepath) %>% bind_rows() %>%
+  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
+  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  mutate(creation_year=format(as.Date(`Creation date`, format="%d/%m/%Y"), "%Y")) %>%
+  group_by(creation_year, major) %>%
+  tally() %>%
+  mutate(major=factor(major, levels=3:1)) %>%
+  ggplot(aes(creation_year, n, fill=major)) +
+  theme_camprot(base_size=15, border=FALSE, aspect_square=FALSE) +
+  scale_fill_manual(values=get_cat_palette(3), name='Major version') +
+  xlab('Data generation year') +
+  ylab('Fraction PRIDE submissions')
+
+print(p + geom_bar(position='fill', stat='identity') + geom_text(aes(label=n), position=position_fill(vjust=0.5)))
+
+print(p + geom_bar(position='stack', stat='identity') + geom_text(aes(label=n), position=position_stack(vjust=0.5)))
+```
+```{r}
+parsed <- readRDS(cache_filepath) %>% bind_rows()
+summary_processing <- parsed %>%
+  mutate(keep=ifelse(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse'), 'Parsed', 'Wrong Instrument version')) %>%
+  pull(keep) %>% table()
+
+
+summary_processing <- c(summary_processing, readRDS(cache_filepath_invalid_accessions) %>% strsplit(split = 'for') %>% sapply('[[', 1) %>% table())
+```
+
+```{r}
+print(nrow(submission_details))
+print(sum(summary_processing))
+
+p <- stack(summary_processing) %>%
+  mutate(fractiion=round(values/sum(values), 2)) %>%
+  ggplot(aes(x=1, values, fill=ind)) +
+  geom_bar(stat='identity', position='fill') +
+  geom_text(aes(label=values), position=position_fill(vjust=0.5)) +
+  theme_camprot() +
+  coord_polar('y', start=0) +
+  theme(axis.text=element_blank(), axis.ticks=element_blank(), axis.title=element_blank(), panel.border=element_blank()) +
+  scale_fill_manual(values=c('grey50', get_cat_palette(4)), name='')
+
+print(p)
+ggsave('./results/parsed.png')
+```
+
+
