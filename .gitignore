@@ -1,5 +1,5 @@
 # rds results files for benchmark analysis
-benchmark/resutls/*rds
+benchmark/results/*rds
 
 # History files
 .Rhistory
