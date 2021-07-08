@@ -147,7 +147,9 @@ submission_details <- read.delim('../../shared_files/pride_orbitrap.csv', sep='\
 print(dim(submission_details))
 
 submission_details <- submission_details %>%
-  filter(!grepl(';', Instrument), grepl('Orbitrap', Instrument), Repos=='PRIDE') %>%
+  filter(!grepl(';', Instrument),
+         grepl('Orbitrap', Instrument),
+         Repos=='PRIDE') %>%
   separate(Announce.Date, into=c('year', 'month', 'day'), sep='-', remove = FALSE)
 
 dim(submission_details)
@@ -290,7 +292,9 @@ readRDS(cache_filepath) %>% bind_rows() %>%
 tune_version_table <- readRDS(cache_filepath) %>% bind_rows() %>%
   filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
   merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  select(PRIDE, `Instrument model`, `Software version`, year) %>% unique() %>%
   separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE)
+
 
 tune_version_table %>%
   group_by(major) %>%
@@ -319,7 +323,6 @@ tune_version_table %>% filter(year==2014)
 ```{r}
 library(camprotR)
 #info_details
-
 
 p <- tune_version_table %>%
   group_by(year=ifelse(year<2017, '<2017', year), major) %>%
@@ -391,33 +394,6 @@ p <- stack(summary_processing) %>%
 print(p)
 ggsave('./results/parsed.png')
 ```
-```{r}
-x <- readRDS(cache_filepath) %>% bind_rows() %>%
-  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
-  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
-  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
-  mutate(creation_year=format(as.Date(`Creation date`, format="%d/%m/%Y"), "%Y"))
-```
 
-```{r}
-x <- x %>%
-  separate(`Creation date`, into=c('creation_date', 'creation_time'), remove=FALSE, sep=' ') %>%
-  mutate(creation_date=as.Date(`creation_date`, format="%d/%m/%Y"), Announce.Date=as.Date(Announce.Date))
-  
-x %>%
-  ggplot(aes(creation_date)) +
-  geom_histogram(bins=50) +
-  theme_camprot()
-
-x %>%
-  ggplot(aes(Announce.Date, creation_date)) +
-  geom_point() +
-  theme_camprot()
-
-x %>%
-  ggplot(aes(creation_date, Announce.Date-creation_date)) +
-  geom_point() +
-  theme_camprot()
-```
 
 
