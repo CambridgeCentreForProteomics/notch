@@ -1,4 +1,4 @@
----
+  ---
 title: "Parse PSMs"
 author:
   - name: "Tom Smith"
@@ -27,7 +27,7 @@ library(MSnbase)
 Read in PSM data
 ```{r}
 infiles <- Sys.glob('../raw/total*PSMs.txt.gz')
-names(infiles) <- c('AGC: 2E5',  'AGC: 5E4')
+names(infiles) <- c('AGC: 2E5',  'AGC: 5E4', 'Tune v3')
 psm <- infiles %>% lapply(read.delim)
 print(infiles)
 ```
@@ -139,6 +139,8 @@ length(unique(psm_parsed_annt$`AGC: 2E5`$Master.Protein.Accessions))
 length(unique(psm_parsed_annt$`AGC: 5E4`$Master.Protein.Accessions))
 length(intersect(unique(psm_parsed_annt$`AGC: 2E5`$Master.Protein.Accessions),
                  unique(psm_parsed_annt$`AGC: 5E4`$Master.Protein.Accessions)))
+length(intersect(unique(psm_parsed_annt$`AGC: 2E5`$Master.Protein.Accessions),
+                 unique(psm_parsed_annt$`Tune v3`$Master.Protein.Accessions)))
 ```
 
 

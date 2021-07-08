@@ -20,6 +20,8 @@ library(camprotR)
 library(tidyverse)
 library(limma)
 library(MSnbase)
+
+select <- dplyr::select
 ```
 
 
@@ -95,14 +97,14 @@ datasets <- list('protein'=prot_res, 'peptide'=pep_res)
 
 all_mock_limma_results <- datasets %>% names() %>% lapply(function(l){
   
-  datasets[[l]] %>% names() %>% lapply(function(a){
+  datasets[[l]] %>% names() %>% lapply(function(r){
     
-     datasets[[l]][[a]] %>% names() %>% lapply(function(t){
+     datasets[[l]][[r]] %>% names() %>% lapply(function(t){
       
-        obj <- datasets[[l]][[a]][[t]]$agg
+        obj <- datasets[[l]][[r]][[t]]$agg
         
         results <- run_limma(obj, mock=TRUE) %>%
-          mutate(level=l, agc=a, threshold=t)
+          mutate(level=l, run=r, threshold=t)
         
         results
       }) %>% do.call(what='rbind')
@@ -110,9 +112,7 @@ all_mock_limma_results <- datasets %>% names() %>% lapply(function(l){
   }) %>% do.call(what='rbind')
 ```
 
-```{r}
-all_mock_limma_results %>% filter(adj.P.Val<0.01)
-```
+
 
 Run limma for all datasets
 ```{r}
@@ -120,13 +120,13 @@ Run limma for all datasets
 
 all_limma_results <- datasets %>% names() %>% lapply(function(l){
   
-  datasets[[l]] %>% names() %>% lapply(function(a){
+  datasets[[l]] %>% names() %>% lapply(function(r){
     
-     datasets[[l]][[a]] %>% names() %>% lapply(function(thresh){
+     datasets[[l]][[r]] %>% names() %>% lapply(function(thresh){
       
-        obj <- datasets[[l]][[a]][[thresh]]$agg
+        obj <- datasets[[l]][[r]][[thresh]]$agg
         results <- run_limma(obj) %>%
-          mutate(level=l, agc=a, threshold=thresh)
+          mutate(level=l, run=r, threshold=thresh)
         
         results
       }) %>% do.call(what='rbind')
@@ -134,64 +134,11 @@ all_limma_results <- datasets %>% names() %>% lapply(function(l){
   }) %>% do.call(what='rbind')
 ```
 
-```{r}
-select <- dplyr::select
-```
+
 
 ```{r}
-thresholds_to_retain <- all_limma_results %>%
-      select(threshold) %>%
-      unique() %>%
-      separate(threshold, into=c('delta', 'interference', 'sn', 'notch'), sep=', ', remove=FALSE) %>%
-      pull(threshold)
-    
-    
-to_plot <- all_limma_results %>%
-  filter(level=='protein', agc=='AGC: 2E5', threshold %in% thresholds_to_retain) %>%
-  separate(threshold, into=c('delta', 'interference', 'sn', 'notch'), sep=', ', remove=FALSE) %>%
-  mutate(notch=recode(notch, '1'='With notch filt', '0'='Without notch filt.'),
-         sn=factor(sn, levels=c(0,10,100)),
-         interference=factor(interference, levels=c(10, 50, 100)))
-
-complete_feature_n <- to_plot %>% select(delta, interference, sn, notch) %>% unique() %>% nrow()
-
-to_plot %>%
-  group_by(Row.names) %>%
-  tally() %>%
-  pull(n) %>%
-  table()
-
-keep_features <- to_plot %>%
-  group_by(Row.names) %>%
-  tally() %>%
-  filter(n==(complete_feature_n*2)) %>% # * 2 contrasts
-  pull(Row.names)
-
-print(length(keep_features))
-print(to_plot %>%
-  #filter(Row.names %in% keep_features) %>%
-  #mutate(comparison=gsub('x', '', comparison)) %>%
-  group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
-  summarise(proportion_sig=mean(as.numeric(adj.P.Val<0.01), na.rm=TRUE),
-            ave_lgfc=mean(logFC, na.rm=TRUE))) %>%
-  ungroup() %>%
-  select(delta, interference, sn, notch) %>% unique()
-    
-to_plot %>%
-  filter(Row.names %in% keep_features) %>%
-  mutate(comparison=gsub('x', '', comparison)) %>%
-  filter(species=='S.cerevisiae', interference==10, delta==0.2, notch=='With notch filt') 
-```
-```{r}
-complete_feature_n
-
-to_plot %>%
-  group_by(Row.names) %>%
-  tally() %>% pull(n) %>% table()
-```
-```{r}
-agcs <- unique(all_limma_results$agc)
-names(agcs) <- agcs
+runs <- unique(all_limma_results$run)
+names(runs) <- runs
 
 levels <- unique(all_limma_results$level)
 names(levels) <- levels
@@ -237,7 +184,7 @@ thresholds_to_retain <- all_limma_results %>%
     pull(threshold)
 
 to_plot <- all_limma_results %>%
-  filter(level=='protein', agc=='AGC: 5E4', threshold %in% thresholds_to_retain) %>%
+  filter(level=='protein', run=='AGC: 5E4', threshold %in% thresholds_to_retain) %>%
   separate(threshold, into=c('delta', 'interference', 'sn', 'notch'), sep=', ', remove=FALSE) %>%
   mutate(notch=recode(notch, '1'=TRUE, '0'=FALSE))
 
@@ -262,7 +209,7 @@ to_plot_common <- to_plot %>%
          fn=!sig)
 
 summarised_all <- to_plot_common %>%
-  group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
+  group_by(threshold, comparison, species, delta, interference, sn, notch, run) %>%
   summarise(ave_lgfc=mean(logFC, na.rm=TRUE),
             tp=sum(tp),
             fp=sum(fp),
@@ -274,7 +221,7 @@ summarised_all <- to_plot_common %>%
 
 summarised_with_notch <- to_plot_common %>%
   filter(contains_notch) %>%
-  group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
+  group_by(threshold, comparison, species, delta, interference, sn, notch, run) %>%
   summarise(ave_lgfc=mean(logFC, na.rm=TRUE),
             tp=sum(tp),
             fp=sum(fp),
@@ -321,14 +268,13 @@ summarised %>%
   geom_text(aes(label=round(value, 4), y=Inf), vjust=0.9, position = position_dodge(width = 1), size=4) +
   theme(aspect.ratio=1)
 
-?expansion
 ```
 
 
 ```{r}
 
-limma_filtering_sig_count_tile_plots <- agcs %>%
-  lapply(function(a){
+limma_filtering_sig_count_tile_plots <- runs %>%
+  lapply(function(r){
     levels %>%
     lapply(function(l) {
 
@@ -340,7 +286,7 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
       pull(threshold)
 
     to_plot <- all_limma_results %>%
-      filter(level==l, agc==a, threshold %in% thresholds_to_retain) %>%
+      filter(level==l, run==r, threshold %in% thresholds_to_retain) %>%
       separate(threshold, into=c('delta', 'interference', 'sn', 'notch'), sep=', ', remove=FALSE) %>%
       mutate(notch=recode(notch, '1'='With notch filt', '0'='Without notch filt.'),
              sn=factor(sn, levels=c(0,10,100)),
@@ -371,7 +317,7 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
              tp=((sig_up & species=='S.cerevisiae') | (sig_dw & species=='H.sapiens')),
              fp=((sig_dw & species=='S.cerevisiae') | (sig_up & species=='H.sapiens')),
              fn=!sig) %>%
-      group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
+      group_by(threshold, comparison, species, delta, interference, sn, notch, run) %>%
       summarise(ave_lgfc=mean(logFC, na.rm=TRUE),
                 tp=sum(tp),
                 fp=sum(fp),
@@ -390,7 +336,7 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
     summarised_common_features_with_notch <- to_plot %>%
       filter(Row.names %in% keep_features) %>%
       mutate(comparison=gsub('x', '', comparison)) %>%
-      merge(contains_notch[[a]][[l]],
+      merge(contains_notch[[r]][[l]],
             by.x=c('comparison', 'Row.names'),
             by.y=c('comparison', group_id)) %>%
       mutate(sig=adj.P.Val<0.01,
@@ -399,7 +345,7 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
              tp=((sig_up & species=='S.cerevisiae') | (sig_dw & species=='H.sapiens')),
              fp=((sig_dw & species=='S.cerevisiae') | (sig_up & species=='H.sapiens')),
              fn=!sig) %>%
-      group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
+      group_by(threshold, comparison, species, delta, interference, sn, notch, run) %>%
       summarise(ave_lgfc=median(logFC, na.rm=TRUE),
                 tp=sum(tp),
                 fp=sum(fp),
@@ -428,7 +374,7 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
       scale_x_discrete(expand = c(0,0)) +
             scale_y_discrete(expand = c(0,0)) +
       theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
-      ggtitle(sprintf('%s - %s', a, l))
+      ggtitle(sprintf('%s - %s', r, l))
     
     print(p)
     print(p + aes(fill=precision, label=round(precision, 3)) +
@@ -455,7 +401,7 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
     p3 <- to_plot %>%
       mutate(comparison=gsub('x', '', comparison)) %>%
       mutate(sig=adj.P.Val<0.01) %>%
-      group_by(threshold, comparison, species, delta, interference, sn, notch, agc) %>%
+      group_by(threshold, comparison, species, delta, interference, sn, notch, run) %>%
       summarise(n_sig=sum(as.numeric(sig), na.rm=TRUE)) %>%
       ggplot(aes(y=interaction(interference, delta, sep=', '),
                  x=interaction(sn, notch, sep=', '),
@@ -475,7 +421,7 @@ limma_filtering_sig_count_tile_plots <- agcs %>%
       scale_x_discrete(expand = c(0,0)) +
             scale_y_discrete(expand = c(0,0)) +
       theme(axis.text.x=element_text(angle=45, vjust=1, hjust=1)) +
-      ggtitle(sprintf('%s - %s', a, l))
+      ggtitle(sprintf('%s - %s', r, l))
     
     print(p3)
     return(list('to_plot'=to_plot, 'keep_features'=keep_features, 'p'=p, 'p2'=p2, 'p3'=p3))
@@ -538,19 +484,19 @@ psm_res_flt <- readRDS('../results/psm_res_flt.rds')
 ```{r}
 thresholds_of_interest <- list(c('0.2, 10, 10, 0'), c('0.5, 10, 10, 0'))
 
-contains_notch_filt <- psm_res_flt %>% lapply(function(agc){
+contains_notch_filt <- psm_res_flt %>% lapply(function(run){
   contains_notch <- vector('list', length(thresholds_of_interest))
   names(contains_notch) <- thresholds_of_interest
   for(threshold in thresholds_of_interest){
 
-    contains_notch_1_2 <- agc[[threshold]][,1:7] %>%
+    contains_notch_1_2 <- run[[threshold]][,1:7] %>%
       get_notch_per_protein() %>%
       group_by(Master.Protein.Accessions) %>%
       summarise(max_fraction=max(fraction_below)) %>%
       filter(max_fraction>0) %>%
       mutate(comparison='2 vs 1')
     
-    contains_notch_1_6 <- agc[[threshold]][,c(1:4, 8:10)] %>%
+    contains_notch_1_6 <- run[[threshold]][,c(1:4, 8:10)] %>%
       get_notch_per_protein() %>%
       group_by(Master.Protein.Accessions) %>%
       summarise(max_fraction=max(fraction_below)) %>%
@@ -605,7 +551,7 @@ expected_data <- expected %>%
 
 plus_minus_notch <- limma_filtering_sig_count_tile_plots$`AGC: 5E4`$protein$to_plot %>%
   filter(interference==10, sn==10, delta==0.5) %>%
-  select(Row.names, logFC, species, comparison, level, agc, notch) %>%
+  select(Row.names, logFC, species, comparison, level, run, notch) %>%
   pivot_wider(names_from=notch, values_from=logFC) %>%
   mutate(comparison=gsub('x', '', comparison)) %>%
   merge(contains_notch_filt$`AGC: 5E4`$`0.5, 10, 10, 0`,

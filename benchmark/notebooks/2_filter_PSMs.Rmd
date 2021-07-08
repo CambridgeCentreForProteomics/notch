@@ -1,3 +1,5 @@
+
+
 ---
 title: 'Filter PSMs'
 author:
@@ -31,6 +33,19 @@ Read in the PSM data
 psm_res <- readRDS('../results/psm_res.rds')
 ```
 
+```{r, fig.width=4, fig.height=4}
+psm_res %>% names() %>% lapply(function(x){
+  p <- psm_res[[x]] %>%
+    log(base=2) %>%
+    plot_quant(method='histogram') +
+    theme_camprot() +
+    xlab('Reporter ion intensity (log2)')
+  
+  filename <- file.path('../results/plots/', paste0(gsub(':| ', '', x), '_ion_intensities.png'))
+  
+  ggsave(filename, p, height=5, width=5)
+})
+```
 
 Plotting the proportion of missing values 
 ```{r}
@@ -346,7 +361,7 @@ Now, let's filter the PSMs against the interference and average S/N thresholds +
 
 delta_thresholds <- c(0, 0.2, 0.5)
 interference_thresholds <- c(10, 50, 100)
-sn_thresholds <- 0
+sn_thresholds <- c(0, 10)
 notch_thresholded <- c(TRUE, FALSE)
 
 combinations <- as.list(as.data.frame(t(crossing(

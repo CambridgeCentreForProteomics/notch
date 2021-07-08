@@ -23,6 +23,7 @@ library(camprotR)
 library(ggplot2)
 library(tidyverse)
 library(MSnbase)
+library(parallel)
 ```
 
 Read in PSM-level quant and expected fold changes
@@ -66,10 +67,10 @@ Aggregate to protein-level abundance
 ```{r}
 
 prot_res <- psm_res_flt %>% lapply(function(agc_target){
-  agc_target %>% lapply(function(thresholded_psms){
+  agc_target %>% mclapply(function(thresholded_psms){
     
     aggregate_psms(thresholded_psms, level='protein')
-  })
+  }, mc.cores=4)
 })
 
 ```
@@ -82,11 +83,9 @@ Aggregate to peptide-level abundance
 
 pep_res <- psm_res_flt %>% lapply(function(agc_target){
   
-  agc_target %>% lapply(function(thresholded_psms){
-
-    
+  agc_target %>% mclapply(function(thresholded_psms){
     aggregate_psms(thresholded_psms, level='peptide')
-  })
+  }, mc.cores=4)
     
 })
 
@@ -95,6 +94,19 @@ pep_res <- psm_res_flt %>% lapply(function(agc_target){
 
 ```
 
+
+
+
+```{r}
+saveRDS(prot_res, '../results/prot_res.rds')
+saveRDS(pep_res, '../results/pep_res.rds')
+```
+
+*Can re-run cells below without re-aggregating if required*
+```{r, eval=FALSE}
+prot_res <- readRDS('../results/prot_res.rds')
+pep_res <- readRDS('../results/pep_res.rds')
+```
 
 How many proteins per AGC target and threshold parameters are retained.
 ```{r}
@@ -105,7 +117,7 @@ plot_n_features <- function(obj, feature_name='Proteins'){
     data.frame() %>% setNames('n_proteins') %>%
     tibble::rownames_to_column('threshold') %>%
     separate(threshold, into=c('agc', NA), sep='\\.', remove=FALSE) %>%
-    mutate(threshold=gsub('AGC: .E..', '', threshold)) %>%
+    mutate(threshold=gsub('AGC: .E..|Tune v3.', '', threshold)) %>%
     separate(threshold,
              into=c('delta', 'interference', 'mean_sn', 'notch'), sep=', ', remove=FALSE) %>%
     mutate(notch=recode(notch, '1'='With notch filt', '0'='Without notch filt.')) %>%
@@ -126,16 +138,6 @@ plot_n_features <- function(obj, feature_name='Proteins'){
 prot_res %>% plot_n_features()
 pep_res %>% plot_n_features('Peptides')
 ```
-```{r}
-saveRDS(prot_res, '../results/prot_res.rds')
-saveRDS(pep_res, '../results/pep_res.rds')
-```
-
-*Can re-run cells below without re-aggregating if required*
-```{r}
-prot_res <- readRDS('../results/prot_res.rds')
-pep_res <- readRDS('../results/pep_res.rds')
-```
 
 Get fold changes for protein and peptide-level abundances.
 ```{r}
@@ -148,7 +150,7 @@ summarisations <- list('protein'=prot_res, 'peptide'=pep_res)
 ```
 
 ```{r}
-# define thresholds to plot fold changes. Each set of threshold will be plotted at peptide and protein level, with both AGC settings
+# define thresholds to plot fold changes. Each set of threshold will be plotted at peptide and protein level, with both AGC settings and tune version
 datasets <- list(c('0.2, 50, 10, 0'), c('0.5, 10, 0, 0'), c('0.5, 10, 16, 0')) 
 ```
 

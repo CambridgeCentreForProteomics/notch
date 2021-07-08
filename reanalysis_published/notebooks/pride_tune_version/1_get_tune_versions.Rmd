@@ -287,17 +287,16 @@ readRDS(cache_filepath) %>% bind_rows() %>%
 
 
 ```{r}
-readRDS(cache_filepath) %>% bind_rows() %>%
+tune_version_table <- readRDS(cache_filepath) %>% bind_rows() %>%
   filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
   merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
-  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE)
+
+tune_version_table %>%
   group_by(major) %>%
   tally()
 
-p <- readRDS(cache_filepath) %>% bind_rows() %>%
-  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
-  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
-  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+p <- tune_version_table %>%
   group_by(major, `Instrument model`) %>%
   tally() %>%
   ggplot(aes(`Instrument model`, n, fill=major)) +
@@ -310,17 +309,11 @@ p <- readRDS(cache_filepath) %>% bind_rows() %>%
 print(p + geom_bar(position='fill', stat='identity') + geom_text(aes(label=n), position=position_fill(vjust=0.5)))
 print(p + geom_bar(position='stack', stat='identity') + geom_text(aes(label=n), position=position_stack(vjust=0.5)))  
 ```
-```{r}
-476/sum(476, 509, 127)
-```
 
 
+Sanity checking the one study with PRIDE submission in 2014. All looks correct.
 ```{r}
-readRDS(cache_filepath) %>% bind_rows() %>%
-  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
-  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
-  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
-  filter(year==2014)
+tune_version_table %>% filter(year==2014)
 ```
 
 ```{r}
@@ -328,10 +321,7 @@ library(camprotR)
 #info_details
 
 
-p <- readRDS(cache_filepath) %>% bind_rows() %>%
-  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
-  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
-  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+p <- tune_version_table %>%
   group_by(year=ifelse(year<2017, '<2017', year), major) %>%
   tally() %>%
   mutate(major=factor(major, levels=1:3)) %>%
@@ -349,7 +339,9 @@ ggsave(plot = p1, './results/version.png')
 print(p + geom_bar(position='stack', stat='identity') + geom_text(aes(label=n), position=position_stack(vjust=0.5)))
 ```
 ```{r}
-30/102
+tune_version_table %>% group_by(major==3) %>% tally() %>% mutate(fraction=n/sum(n))
+
+tune_version_table %>% filter(year==2021) %>% group_by(major==3) %>% tally() %>% mutate(fraction=n/sum(n))
 ```
 
 ```{r}
@@ -374,7 +366,8 @@ print(p + geom_bar(position='stack', stat='identity') + geom_text(aes(label=n), 
 ```{r}
 parsed <- readRDS(cache_filepath) %>% bind_rows()
 summary_processing <- parsed %>%
-  mutate(keep=ifelse(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse'), 'Parsed', 'Wrong Instrument version')) %>%
+  mutate(keep=ifelse(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse'),
+                     'Parsed', 'Wrong Instrument version')) %>%
   pull(keep) %>% table()
 
 
@@ -397,6 +390,34 @@ p <- stack(summary_processing) %>%
 
 print(p)
 ggsave('./results/parsed.png')
+```
+```{r}
+x <- readRDS(cache_filepath) %>% bind_rows() %>%
+  filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
+  merge(submission_details, by.x='PRIDE', by.y='Dataset.Identifier') %>%
+  separate(`Software version`, into=c('major', 'minor'), sep='\\.', remove=FALSE) %>%
+  mutate(creation_year=format(as.Date(`Creation date`, format="%d/%m/%Y"), "%Y"))
+```
+
+```{r}
+x <- x %>%
+  separate(`Creation date`, into=c('creation_date', 'creation_time'), remove=FALSE, sep=' ') %>%
+  mutate(creation_date=as.Date(`creation_date`, format="%d/%m/%Y"), Announce.Date=as.Date(Announce.Date))
+  
+x %>%
+  ggplot(aes(creation_date)) +
+  geom_histogram(bins=50) +
+  theme_camprot()
+
+x %>%
+  ggplot(aes(Announce.Date, creation_date)) +
+  geom_point() +
+  theme_camprot()
+
+x %>%
+  ggplot(aes(creation_date, Announce.Date-creation_date)) +
+  geom_point() +
+  theme_camprot()
 ```
 
 
