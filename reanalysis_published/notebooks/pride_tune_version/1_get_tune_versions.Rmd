@@ -1,10 +1,20 @@
 ---
-title: "R Notebook"
-output: html_notebook
+title: "Tune versions"
+author:
+  - name: "Tom Smith"
+    affiliation: "Cambridge Centre for Proteomics"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+abstract: | 
+  Here, we extract the Tune versions from Orbitrap Fusion, Lumos and Eclipse studies
+output:
+  pdf_document:
+  html_notebook: default
+geometry: margin=1in
+fontfamily: mathpazo
+fontsize: 11pt
 ---
 
-
-
+Load packages
 ```{r}
 library(curl)
 library(rawDiag)
@@ -13,7 +23,7 @@ library(camprotR)
 options(timeout=100000) # allow long downloads
 ```
 
-
+Functions to download data and extract Tune version.
 ```{r}
 
 # from https://stackoverflow.com/questions/52911812/check-if-url-exists-in-r
@@ -87,14 +97,6 @@ get_raw_filepath <- function(pride_accession, year, month){
   return(file.path(url, top_file)) 
 }
 
-
-
-#con <- url('ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2015/06/PXD002092')
-#check <- suppressWarnings(try(open.connection(con,open="rt",timeout=t),silent=T)[1])
-
-#url <- valid_url('ftp://ftp.pride.ebi.ac.uk/pride/data/archive/2016/08/PXD004222')
-#get_raw_filepath('PXD004222', '2016', '08')
-
 get_metainfo <- function(url){
   # Download the file
   tmp_file <- '.temp.raw'
@@ -141,7 +143,9 @@ get_metainfo <- function(url){
 
 
 
-Read in the table of orbitrap fusion pride accessions and extract metainfo 
+Read in the table of orbitrap fusion pride accessions and extract metainfo. We'll
+also set up a cache so we don't need to reprocess the same files in case this doesn't
+complete in a single run.
 ```{r}
 submission_details <- read.delim('../../shared_files/pride_orbitrap.csv', sep='\t')
 print(dim(submission_details))
@@ -163,9 +167,9 @@ table(submission_details$year)
 
 cache_filepath <- './info_details_cache'
 cache_filepath_invalid_accessions <- './invalid_pride_cache'
-#file.remove(cache_filepath_invalid_accessions)
-```
 
+```
+Download and parse .raw files.
 ```{r}
 if(file.exists(cache_filepath)){
   cache <- readRDS(cache_filepath)
@@ -287,7 +291,7 @@ readRDS(cache_filepath) %>% bind_rows() %>%
   write.table('./meta_information.tsv', sep='\t', row.names=FALSE, quote=FALSE)
 ```
 
-
+Plotting Tune versions
 ```{r}
 tune_version_table <- readRDS(cache_filepath) %>% bind_rows() %>%
   filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
@@ -314,12 +318,11 @@ print(p + geom_bar(position='fill', stat='identity') + geom_text(aes(label=n), p
 print(p + geom_bar(position='stack', stat='identity') + geom_text(aes(label=n), position=position_stack(vjust=0.5)))  
 ```
 
-
 Sanity checking the one study with PRIDE submission in 2014. All looks correct.
 ```{r}
 tune_version_table %>% filter(year==2014)
 ```
-
+Tune versions by submission year
 ```{r}
 library(camprotR)
 #info_details
@@ -346,7 +349,7 @@ tune_version_table %>% group_by(major==3) %>% tally() %>% mutate(fraction=n/sum(
 
 tune_version_table %>% filter(year==2021) %>% group_by(major==3) %>% tally() %>% mutate(fraction=n/sum(n))
 ```
-
+Tune versions by data generation year
 ```{r}
 p <- readRDS(cache_filepath) %>% bind_rows() %>%
   filter(`Instrument name` %in% c('Orbitrap Fusion', 'Orbitrap Fusion Lumos', 'Orbitrap Eclipse')) %>%
@@ -377,6 +380,7 @@ summary_processing <- parsed %>%
 summary_processing <- c(summary_processing, readRDS(cache_filepath_invalid_accessions) %>% strsplit(split = 'for') %>% sapply('[[', 1) %>% table())
 ```
 
+Why don't some datasets get parsed?
 ```{r}
 print(nrow(submission_details))
 print(sum(summary_processing))

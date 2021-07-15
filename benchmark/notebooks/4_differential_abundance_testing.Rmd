@@ -270,7 +270,7 @@ summarised %>%
 
 ```
 
-
+Plot precision, recall, F1 and median fold-change for each combination of input data and processing parameters.
 ```{r}
 
 limma_filtering_sig_count_tile_plots <- runs %>%
@@ -445,7 +445,7 @@ for(level in names(plots)){
 
 ```
 
-
+Fold differences +/- notch filtering
 ```{r}
 filtering_to_plot <- list('sn'=0, 'int'=10, delta=0.5)
 
@@ -568,7 +568,7 @@ plus_minus_notch %>%
   ylab('With notch filtering') +
   geom_point(data=expected_data, colour=get_cat_palette(5)[5], size=3)
 ```
-
+How does notch filtering alter fold changes relative to the ground truth.
 ```{r}
 library(ggbeeswarm)
 

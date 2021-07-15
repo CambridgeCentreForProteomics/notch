@@ -96,13 +96,13 @@ pep_res <- psm_res_flt %>% lapply(function(agc_target){
 
 
 
-
+Save to disk
 ```{r}
 saveRDS(prot_res, '../results/prot_res.rds')
 saveRDS(pep_res, '../results/pep_res.rds')
 ```
 
-*Can re-run cells below without re-aggregating if required*
+*Can re-run code chunk below to avoid re-aggregating if required*
 ```{r, eval=FALSE}
 prot_res <- readRDS('../results/prot_res.rds')
 pep_res <- readRDS('../results/pep_res.rds')

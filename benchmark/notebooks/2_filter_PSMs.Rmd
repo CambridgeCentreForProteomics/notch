@@ -1,5 +1,3 @@
-
-
 ---
 title: 'Filter PSMs'
 author:
@@ -33,6 +31,7 @@ Read in the PSM data
 psm_res <- readRDS('../results/psm_res.rds')
 ```
 
+Plot the tag intensities, without annotating notch.
 ```{r, fig.width=4, fig.height=4}
 psm_res %>% names() %>% lapply(function(x){
   p <- psm_res[[x]] %>%
