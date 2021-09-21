@@ -1,4 +1,4 @@
-  ---
+---
 title: "Parse PSMs"
 author:
   - name: "Tom Smith"

@@ -368,7 +368,7 @@ limma_filtering_sig_count_tile_plots <- runs %>%
                            midpoint=0.5,
                            name='F1 score') +
       ylab('Max interference (%), Min delta score') +
-      xlab('Min Signal/Noise + Notch') +
+      xlab('Min Signal/Noise') +
       geom_text(size=3) +
       theme(panel.spacing = unit(0, "lines")) +
       scale_x_discrete(expand = c(0,0)) +
@@ -415,7 +415,7 @@ limma_filtering_sig_count_tile_plots <- runs %>%
                            midpoint=0.5,
                            name=sprintf('Significant\n%ss\n(FDR<1%%)', l)) +
       ylab('Max. interference (%), min. delta score') +
-      xlab('Min Signal/Noise + Notch') +
+      xlab('Min Signal/Noise') +
       geom_text(size=3) +
       theme(panel.spacing = unit(0, "lines")) +
       scale_x_discrete(expand = c(0,0)) +
