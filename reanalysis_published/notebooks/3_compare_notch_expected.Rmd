@@ -146,13 +146,13 @@ plot_correlation <- function(obj, colours=get_cat_palette(7), include_tls=FALSE)
   
   pred_vs_obs_tag_int <- obj %>%
     ggplot(aes(log2(pred), log2(obs))) +
-    geom_point(size=0.05, alpha=0.1, colour='grey30') +
+    geom_point(size=0.05, alpha=0.02, colour='grey30') +
     geom_hline(yintercept=log2(notch_lower), size=0.5, colour=colours[2], linetype=2) +
     geom_hline(yintercept=log2(notch_upper), size=0.5, colour=colours[1], linetype=2) +
     geom_abline(slope=1, size=0.5, colour=colours[3]) +
     theme_camprot(border=FALSE) +
-    xlab('Predicted intensity') +
-    ylab('Observed intensity') +
+    xlab('Predicted intensity (log2)') +
+    ylab('Observed intensity x(log2)') +
     scale_y_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max)) +
     scale_x_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max)) +
     annotate(geom='text', x=10, y=max(log2(obj$obs)),
@@ -174,6 +174,7 @@ plot_correlation <- function(obj, colours=get_cat_palette(7), include_tls=FALSE)
 }
 ```
 
+
 ```{r}
 
 pred_obs %>% names() %>% lapply(function(x){
@@ -189,6 +190,44 @@ pred_obs %>% names() %>% lapply(function(x){
   print(p1 + ggtitle(x))
   print(p2 + ggtitle(x))
 })
+```
+Replotting a LOPIT-DC replicate 1 using density 
+```{r}
+colours=get_cat_palette(7)
+obj <- pred_obs$LOPIT_DC_U2OS_Rep1 %>%
+  filter(is.finite(obs), is.finite(pred))
+  
+pca <- data.frame(x=log2(obj$pred), y=log2(obj$obs)) %>%
+  prcomp()#formula=~x+y)
+slp <- with(pca, rotation[2,1] / rotation[1,1])
+int <- with(pca, center[2] - slp*center[1])
+
+axis_min <- min(log2(c(obj$pred, obj$obs)), na.rm=TRUE)
+axis_max <- max(log2(c(obj$pred, obj$obs)), na.rm=TRUE)
+
+p_cor <- cor(x=obj$pred, y=obj$obs, method='pearson') %>% round(digits=3)
+  
+  pred_vs_obs_tag_int <- obj %>%
+    ggplot(aes(log2(pred), log2(obs))) +
+    geom_bin2d(bins=100) +
+    #geom_point(size=0.05, alpha=0.1, colour='grey30') +
+    geom_hline(yintercept=log2(notch_lower), size=0.5, colour=colours[2], linetype=2) +
+    geom_hline(yintercept=log2(notch_upper), size=0.5, colour=colours[1], linetype=2) +
+    geom_abline(slope=1, size=0.5, colour=colours[3]) +
+    theme_camprot(border=FALSE) +
+    xlab('Predicted intensity (log2)') +
+    ylab('Observed intensity  (log2)') +
+    scale_y_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max)) +
+    scale_x_continuous(breaks=scales::pretty_breaks(), limits=c(axis_min, axis_max)) +
+    annotate(geom='text', x=10, y=max(log2(obj$obs)),
+             label=paste0('r = ', p_cor), size=5) +
+    scico::scale_fill_scico(palette = "bilbao") +   
+    geom_abline(slope=slp, intercept=int, color=colours[4])
+print(pred_vs_obs_tag_int)
+  
+
+  
+
 ```
 
 ```{r}
