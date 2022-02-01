@@ -1,5 +1,5 @@
 # Orbitrap notch
-A study of the 'notch' in orbitrap TMT reporter ion intensities.
+A study of the 'notch' in Orbitrap TMT reporter ion intensities.
 
 ###### Dependencies:
 - R >= 4.0.3
