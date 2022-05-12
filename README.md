@@ -1,6 +1,8 @@
 # Orbitrap notch
 A study of the 'notch' in Orbitrap TMT reporter ion intensities.
 
+Now published in ACS Measurement Science Au: https://pubs.acs.org/doi/10.1021/acsmeasuresciau.1c00053
+
 ###### Dependencies:
 - R >= 4.0.3
 - tidyverse (CRAN)
